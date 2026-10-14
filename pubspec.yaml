@@ -1,0 +1,31 @@
+name: rhythm_method_flashcards
+description: "Spaced repetition flashcards with a slow start for large decks."
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.11.5
+
+dependencies:
+  # Drift 2.31 matches this Flutter SDK. Newer drift_dev needs an analyzer
+  # that requires meta 1.18, and Flutter 3.41 pins meta 1.17.
+  drift: 2.31.0
+  flutter:
+    sdk: flutter
+  file_selector: 1.1.0
+  path: ^1.9.1
+  path_provider: ^2.1.6
+  # 12.x requires a newer Android Gradle plugin than this project.
+  share_plus: 11.1.0
+  sqlite3_flutter_libs: 0.5.42
+
+dev_dependencies:
+  analyzer: '>=8.1.0 <10.0.2'
+  build_runner: ^2.4.15
+  drift_dev: 2.31.0
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
