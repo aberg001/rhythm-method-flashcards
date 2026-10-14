@@ -1,6 +1,6 @@
 # Scheduling algorithm
 
-This is the spec for how Rhythm Method Flashcards chooses the next card and updates it after Correct or Wrong. The README is the product brief. Where they differ, this document wins. The difference that matters is selection among learning cards: the README sketched a ban on the last three cards, and this spec uses recency weights instead.
+This is the spec for how Rhythm Method Flashcards chooses the next card and updates it after Correct or Wrong. The app overview is in [ARCHITECTURE.md](ARCHITECTURE.md). Where they differ, this document wins. An early product sketch banned the last three cards from coming up again. This spec uses recency weights instead.
 
 Two procedures share one card state. **Grade** updates a card after Wrong or Correct. **Select** chooses the next card. A study session is a loop of select, present, grade. The clock and the random draw are inputs, so the same steps can be replayed in tests.
 
@@ -195,16 +195,16 @@ Each of these is a unit test with a fake clock and a scripted draw. Where a prob
 
 ## Decisions
 
-**Difficulty slows growth, and growth has a floor.** `growth = clamp(C / difficulty, min(C, G_min), C)`. The README's sentence is also compatible with `interval * C * difficulty`, which would lengthen the interval faster on cards the user has failed. That fights priority 2, because weak cards should stay in play. Division matches the name "difficulty": a hard card's interval grows more slowly. Uncapped division is unsafe. After enough wrongs, growth would drop to 1 or below and the card could never graduate. `G_min` at 1.15 prevents that. Difficulty still only changes on wrong answers, as the README says, and it never decays.
+**Difficulty slows growth, and growth has a floor.** `growth = clamp(C / difficulty, min(C, G_min), C)`. Reading difficulty as a multiplier on the correct factor is also compatible with `interval * C * difficulty`, which would lengthen the interval faster on cards the user has failed. That fights priority 2, because weak cards should stay in play. Division matches the name "difficulty": a hard card's interval grows more slowly. Uncapped division is unsafe. After enough wrongs, growth would drop to 1 or below and the card could never graduate. `G_min` at 1.15 prevents that. Difficulty still only changes on wrong answers, and it never decays.
 
 **The learning interval is not a wait.** The selection steps never say that a learning card must be due. Treating the interval as a wait would turn the window into ordinary spaced repetition and remove the drill that makes a small set stick. The interval becomes a wait only after graduation.
 
-**A lapse returns to the drill even if the interval is still long.** This is the README's rule that any wrong reply sets a card into learning regardless of its time interval. The seat is released only by a later correct grade whose resulting interval is above `T`.
+**A lapse returns to the drill even if the interval is still long.** Any wrong reply sets a card into learning regardless of its time interval. The seat is released only by a later correct grade whose resulting interval is above `T`.
 
 **Learning cards are chosen by recency weight, and a new card joins that same draw.** Rank the learning cards most-recent-first with weights `0, 1, ..., L - 1`. The most recent weight is 0, so it is skipped whenever anything else can be shown. The least recent weight is `L - 1`, which is probability `2 / L` when no new card is in the draw, and exactly `2 / W` when the window is full. While `L < W`, the next new card has weight `|R| = L`, so the odds of admitting it rather than drilling are `L` to `sum(R)`. Its probability is `2 / (L + 1)`. Treating those odds as an unnormalized probability `|R| / sum(R) = 2 / (L - 1)` is greater than 1 whenever fewer than three cards are learning, so the weights are normalized by `sum(R) + |R|`. The next new card is the oldest `created_at`. Giving the least-recent card weight `W - 1` even when the window is not full would need a second rule for the ranks in between, and a sparse window would then ignore every card but the oldest. Ranks stay `0` through `L - 1`.
 
-**Due learned cards are ordered by overdue ratio.** The README does not define an order. Ratio prefers cards that are late relative to their own interval, which is what "strengthen what you already learned" wants when a short card and a long card are both due.
+**Due learned cards are ordered by overdue ratio.** The product overview does not define an order among due cards. Ratio prefers cards that are late relative to their own interval, which is what "strengthen what you already learned" wants when a short card and a long card are both due.
 
 **The window is per study scope.** A global window of 10 would let one large topic occupy every seat and block every other topic. Counting seats inside the scope the user chose gives each subject its own slow start. The cost is that studying topics separately can put more than 10 cards into `learning` across the library. Studying everything then sees that larger set and admits nobody new until the count is back under `W`.
 
-**Extra bounds are constants, not settings.** The README fixes the tunable set at five. `I_0`, `I_min`, `G_min`, and the difficulty cap stay in code so the settings screen stays that list.
+**Extra bounds are constants, not settings.** The tunable set is fixed at five. `I_0`, `I_min`, `G_min`, and the difficulty cap stay in code so the settings screen stays that list.

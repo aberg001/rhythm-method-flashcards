@@ -1,6 +1,6 @@
 # Implementation plan
 
-Build order for the iPhone-first Flutter app. The scheduling rules live in [algorithm.md](algorithm.md). Each milestone below is one reviewable chunk. Later milestones assume the earlier ones are in place.
+Build record for the first version of the iPhone-first Flutter app. The scheduling rules live in [algorithm.md](algorithm.md). Work after this version is in [ROADMAP.md](ROADMAP.md). Each milestone below was one reviewable chunk, and later milestones assumed the earlier ones were in place.
 
 v1 is a local, plain-text flashcard app whose study loop follows that spec. Android, macOS, and Windows folders are created with the project. Release work for those platforms is not part of v1.
 
@@ -11,7 +11,7 @@ In scope:
 - Create, rename, reorder, and delete topics and subtopics. Deleting a topic that still has cards or child topics is refused. Nothing is cascade-deleted silently.
 - Create, edit, and delete plain-text cards on a topic.
 - Start a study session on a topic, including its descendants, or on the whole library.
-- The review screen from the README: flip, swipe left for wrong and right for correct, and Edit, Undo, Wrong, Flip, and Correct.
+- The review screen: flip, swipe left for wrong and right for correct, and Edit, Undo, Wrong, Flip, and Correct.
 - The five settings from the spec, with the spec's validation.
 - A local database. Killing the app after a grade does not lose it.
 - On-screen counts so a full learning window does not look like a bug.
@@ -87,7 +87,7 @@ Done when a manual pass on the simulator matches the spec:
 
 ## Milestone 6 — Settings
 
-A settings screen for the five parameters. Enforce the constraints in the form and again inside `grade` and `select`. Defaults are the README defaults. Changing a parameter affects the next grade and the next select, not past review rows.
+A settings screen for the five parameters. Enforce the constraints in the form and again inside `grade` and `select`. Defaults are the spec defaults. Changing a parameter affects the next grade and the next select, not past review rows.
 
 Done when a window of 1 drills a single card until it graduates, and a correct factor of 1 or below is rejected.
 
@@ -99,7 +99,7 @@ Done when the study loop is usable one-handed on a phone-sized simulator, VoiceO
 
 ## Later
 
-Not scheduled here:
+Left unscheduled when this plan was written. [ROADMAP.md](ROADMAP.md) is the current list, and JSON import of this backup has since shipped. At the time, the following were intentionally not part of v1:
 
 - Images, then audio, then richer text. Each one changes the content model and needs a migration.
 - Import of the v1 JSON export.
@@ -109,7 +109,7 @@ Not scheduled here:
 
 ## Risks
 
-- The defaults are untested in real study. 1.5, 0.5, 0.01, 10, and 1 hour are the README's opening guesses. Milestone 6 keeps them changeable. No other magic numbers belong in the UI.
+- The defaults are untested in real study. 1.5, 0.5, 0.01, 10, and 1 hour are the opening guesses. Milestone 6 keeps them changeable. No other magic numbers belong in the UI.
 - A full window can feel stuck. The counts in Milestone 5 are part of the behavior. Without them the app looks broken on the case it is for.
 - Horizontal swipes grade, and vertical movement must not. Grade gestures stay off until the card is flipped, which also cuts accidental grades.
 - Rich text, images, and sound are easy to pull forward. They stay out of the scheduler milestones so the slow start can be tried on real material as plain text.
