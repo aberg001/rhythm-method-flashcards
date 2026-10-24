@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -13,6 +14,12 @@ import 'study_status.dart';
 /// Distance or speed, in logical pixels, that counts as a grade swipe.
 const _swipeDistance = 80.0;
 const _swipeSpeed = 200.0;
+
+/// How long one Y-axis turn takes. The text swaps at the midpoint.
+const _flipDuration = Duration(milliseconds: 300);
+
+/// Answer-side border. A warm accent, neither green nor red.
+const _answerSideColor = Color(0xFFB5683A);
 
 /// One study session. Admissions and grades are written as they happen.
 ///
@@ -39,30 +46,84 @@ class StudySessionScreen extends StatefulWidget {
   State<StudySessionScreen> createState() => _StudySessionScreenState();
 }
 
-class _StudySessionScreenState extends State<StudySessionScreen> {
+class _StudySessionScreenState extends State<StudySessionScreen>
+    with TickerProviderStateMixin {
   List<Topic> _topics = [];
   List<FlashCard> _cards = [];
   SchedulerParameters? _parameters;
   FlashCard? _current;
+  var _face = StudyFace.forward;
   final List<StoredGrade> _grades = [];
-  var _flipped = false;
+  var _showAnswer = false;
+  var _answerSeen = false;
+  var _swappedThisTurn = false;
   var _loaded = false;
   var _busy = false;
   var _generation = 0;
   var _dragDx = 0.0;
+  late final AnimationController _turn;
 
   DateTime _clock() => (widget.now ?? _utcNow)();
 
   WeightDraw get _draw => widget.draw ?? randomWeightDraw;
 
-  bool get _canGrade => _loaded && _flipped && !_busy && _current != null;
+  bool get _canGrade =>
+      _loaded &&
+      _answerSeen &&
+      !_turn.isAnimating &&
+      !_busy &&
+      _current != null;
+
+  bool get _canSwipe => _canGrade && _showAnswer;
+
+  bool get _canFlip => _current != null && !_busy && !_turn.isAnimating;
 
   @override
   void initState() {
     super.initState();
+    _turn = AnimationController(vsync: this, duration: _flipDuration);
+    _turn.addListener(_onTurnTick);
+    _turn.addStatusListener(_onTurnStatus);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _load();
     });
+  }
+
+  @override
+  void dispose() {
+    _turn.removeStatusListener(_onTurnStatus);
+    _turn.removeListener(_onTurnTick);
+    _turn.dispose();
+    super.dispose();
+  }
+
+  void _onTurnTick() {
+    if (!mounted || _swappedThisTurn || _turn.value < 0.5) return;
+    _swappedThisTurn = true;
+    setState(() {
+      _showAnswer = !_showAnswer;
+      if (_showAnswer) _answerSeen = true;
+    });
+  }
+
+  /// The midpoint swap happens while the turn is still running, and that is
+  /// the build that would otherwise leave Wrong and Correct disabled. The
+  /// ticker does not ask for another build when it stops.
+  void _onTurnStatus(AnimationStatus status) {
+    if (!mounted) return;
+    if (status == AnimationStatus.completed ||
+        status == AnimationStatus.dismissed) {
+      setState(() {});
+    }
+  }
+
+  /// Puts the card on the prompt or the answer with no turn in progress.
+  void _resetFace({required bool answer}) {
+    _turn.stop();
+    _swappedThisTurn = false;
+    _turn.value = 0;
+    _showAnswer = answer;
+    _answerSeen = answer;
   }
 
   Future<void> _load() async {
@@ -98,22 +159,24 @@ class _StudySessionScreenState extends State<StudySessionScreen> {
     if (!mounted || generation != _generation) return;
     switch (selection) {
       case SessionClear():
+        _resetFace(answer: false);
         setState(() {
           _current = null;
-          _flipped = false;
+          _face = StudyFace.forward;
           _loaded = true;
           _busy = false;
         });
-      case CardSelected(:final card, :final admitted):
+      case CardSelected(:final card, :final admitted, :final face):
         var shown = card;
         if (admitted) {
-          shown = await LibraryScope.of(context).admit(card.id);
+          shown = await LibraryScope.of(context).admit(card.id, face: face);
           if (!mounted || generation != _generation) return;
           _replace(shown);
         }
+        _resetFace(answer: false);
         setState(() {
           _current = shown;
-          _flipped = false;
+          _face = face;
           _loaded = true;
           _busy = false;
         });
@@ -130,8 +193,19 @@ class _StudySessionScreenState extends State<StudySessionScreen> {
   }
 
   void _flip() {
-    if (_current == null || _flipped || _busy) return;
-    setState(() => _flipped = true);
+    if (!_canFlip) return;
+    if (MediaQuery.disableAnimationsOf(context)) {
+      setState(() {
+        _showAnswer = !_showAnswer;
+        if (_showAnswer) _answerSeen = true;
+      });
+      return;
+    }
+    _swappedThisTurn = false;
+    _turn.forward(from: 0);
+    // A real turn spends its first frames still animating. Rebuild now so
+    // Wrong and Correct stay off until the status listener turns them back on.
+    setState(() {});
   }
 
   void _onDragStart(DragStartDetails details) {
@@ -145,7 +219,7 @@ class _StudySessionScreenState extends State<StudySessionScreen> {
   void _onDragEnd(DragEndDetails details) {
     final distance = _dragDx;
     _dragDx = 0;
-    if (!_canGrade) return;
+    if (!_canSwipe) return;
     final velocity = details.primaryVelocity ?? 0;
     final moved =
         distance.abs() >= _swipeDistance || velocity.abs() >= _swipeSpeed;
@@ -168,6 +242,7 @@ class _StudySessionScreenState extends State<StudySessionScreen> {
       cardId: card.id,
       outcome: outcome,
       now: _clock(),
+      face: _face,
     );
     if (!mounted || generation != _generation) return;
     unawaited(HapticFeedback.selectionClick());
@@ -176,8 +251,8 @@ class _StudySessionScreenState extends State<StudySessionScreen> {
     await _selectNext(generation);
   }
 
-  /// Pops the newest grade in this session and shows that card, already flipped.
-  /// Does not select a different card and does not un-admit.
+  /// Pops the newest grade in this session and shows that card on the answer.
+  /// Does not select a different card, replay the turn, or un-admit.
   Future<void> _undoGrade() async {
     if (_grades.isEmpty || _busy) return;
     final generation = ++_generation;
@@ -188,9 +263,10 @@ class _StudySessionScreenState extends State<StudySessionScreen> {
     if (!mounted || generation != _generation) return;
     _grades.removeLast();
     _replace(restored);
+    _resetFace(answer: true);
     setState(() {
       _current = restored;
-      _flipped = true;
+      _face = stored.result.review.face;
       _loaded = true;
       _busy = false;
     });
@@ -286,8 +362,13 @@ class _StudySessionScreenState extends State<StudySessionScreen> {
       newWaiting: counts.newWaiting,
       learnedDue: counts.learnedDue,
     );
-    final canFlip = !_flipped && !_busy;
-    final spoken = _flipped ? '${card.front}\n${card.back}' : card.front;
+    final prompt = _face == StudyFace.reverse ? card.back : card.front;
+    final answer = _face == StudyFace.reverse ? card.front : card.back;
+    final side = _showAnswer ? answer : prompt;
+    final spoken = _face == StudyFace.reverse ? 'Reverse. $side' : side;
+    final borderColor = _showAnswer
+        ? _answerSideColor
+        : Theme.of(context).colorScheme.outline;
     final cardFace = GestureDetector(
       behavior: HitTestBehavior.opaque,
       onHorizontalDragStart: _onDragStart,
@@ -296,32 +377,53 @@ class _StudySessionScreenState extends State<StudySessionScreen> {
       child: Semantics(
         label: spoken,
         child: ExcludeSemantics(
-          child: Card(
-            key: const Key('card-face'),
-            margin: EdgeInsets.zero,
-            clipBehavior: Clip.antiAlias,
-            child: InkWell(
-              onTap: canFlip ? _flip : null,
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      card.front,
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.headlineSmall,
-                    ),
-                    if (_flipped) ...[
-                      const SizedBox(height: 24),
+          child: AnimatedBuilder(
+            animation: _turn,
+            builder: (context, child) {
+              final t = _turn.value;
+              var angle = t * math.pi;
+              if (t >= 0.5) angle -= math.pi;
+              return Transform(
+                alignment: Alignment.center,
+                transform: Matrix4.identity()
+                  ..setEntry(3, 2, 0.001)
+                  ..rotateY(angle),
+                child: child,
+              );
+            },
+            child: Card(
+              key: const Key('card-face'),
+              margin: EdgeInsets.zero,
+              clipBehavior: Clip.antiAlias,
+              shape: RoundedRectangleBorder(
+                borderRadius: const BorderRadius.all(Radius.circular(12)),
+                side: BorderSide(color: borderColor, width: 2),
+              ),
+              child: InkWell(
+                onTap: _canFlip ? _flip : null,
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (_face == StudyFace.reverse)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: Text(
+                            'Reverse',
+                            key: const Key('reverse-label'),
+                            textAlign: TextAlign.center,
+                            style: Theme.of(context).textTheme.labelLarge,
+                          ),
+                        ),
                       Text(
-                        card.back,
+                        side,
                         textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.titleLarge,
+                        style: Theme.of(context).textTheme.headlineSmall,
                       ),
                     ],
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -375,10 +477,10 @@ class _StudySessionScreenState extends State<StudySessionScreen> {
               Expanded(
                 child: _LabeledButton(
                   label: 'Flip',
-                  onPressed: canFlip ? _flip : null,
+                  onPressed: _canFlip ? _flip : null,
                   child: FilledButton.tonal(
                     key: const Key('flip-button'),
-                    onPressed: canFlip ? _flip : null,
+                    onPressed: _canFlip ? _flip : null,
                     child: const FittedBox(
                       fit: BoxFit.scaleDown,
                       child: Text('Flip'),

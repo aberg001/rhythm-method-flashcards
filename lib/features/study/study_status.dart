@@ -13,7 +13,11 @@ class StudyCounts {
   final int learnedDue;
 }
 
-/// Counts cards in the same scope [selectCard] uses, including the one on screen.
+/// Counts faces in the same scope [selectCard] uses, including the one on screen.
+///
+/// A waiting reverse counts as a new card. One card can add to two counts
+/// when both faces are in play. The sentence in [studyStatusLine] still says
+/// "cards".
 StudyCounts countStudy({
   required List<Topic> topics,
   required List<FlashCard> cards,
@@ -22,17 +26,22 @@ StudyCounts countStudy({
   required SchedulerParameters parameters,
 }) {
   final scope = topicIdsInScope(topics, scopeTopicId);
+  final topicById = {for (final topic in topics) topic.id: topic};
   var learning = 0;
   var newWaiting = 0;
   var learnedDue = 0;
   for (final card in cards) {
     if (!scope.contains(card.topicId)) continue;
-    if (card.learning) {
-      learning++;
-    } else if (card.isNew) {
-      newWaiting++;
-    } else if (cardIsLearned(card, parameters) && cardIsDue(card, now)) {
-      learnedDue++;
+    final reverseDrill = topicById[card.topicId]?.reverseDrill ?? false;
+    for (final face in facesInPlay(card, reverseDrill: reverseDrill)) {
+      if (scheduledLearning(card, face)) {
+        learning++;
+      } else if (scheduledLastReview(card, face) == null) {
+        newWaiting++;
+      } else if (faceIsLearned(card, face, parameters) &&
+          faceIsDue(card, face, now)) {
+        learnedDue++;
+      }
     }
   }
   return StudyCounts(

@@ -86,6 +86,7 @@ final class Topic {
     required this.name,
     this.parentId,
     this.position = 0,
+    this.reverseDrill = false,
   });
 
   final String id;
@@ -94,11 +95,24 @@ final class Topic {
 
   /// Order among topics that share a parent. The scheduler does not use this.
   final int position;
+
+  /// When true, this topic's own cards can grow a reverse face. Subtopics
+  /// do not inherit it. A card follows the switch on its own topic.
+  final bool reverseDrill;
 }
 
 enum GradeOutcome { correct, wrong }
 
+/// Which side of a card a grade or a selection refers to.
+///
+/// [forward] prompts with the front. [reverse] prompts with the back.
+enum StudyFace { forward, reverse }
+
 /// One card. Schedule fields change only through [gradeCard] and [selectCard].
+///
+/// The fields above [createdAt] are the forward face. A null [reverseQueuedAt]
+/// means there is no reverse face. The reverse schedule is not a copy of the
+/// forward one.
 final class FlashCard {
   const FlashCard({
     required this.id,
@@ -110,6 +124,11 @@ final class FlashCard {
     required this.intervalSeconds,
     required this.difficulty,
     required this.createdAt,
+    this.reverseLearning = false,
+    this.reverseLastReview,
+    this.reverseIntervalSeconds,
+    this.reverseDifficulty,
+    this.reverseQueuedAt,
   });
 
   factory FlashCard.fresh({
@@ -142,13 +161,29 @@ final class FlashCard {
   final double difficulty;
   final DateTime createdAt;
 
+  /// Reverse-face schedule. Ignored unless [hasReverse] is true.
+  final bool reverseLearning;
+  final DateTime? reverseLastReview;
+  final int? reverseIntervalSeconds;
+  final double? reverseDifficulty;
+
+  /// When the reverse face joined the new-face line. Null means no reverse.
+  final DateTime? reverseQueuedAt;
+
   bool get isNew => !learning && lastReview == null;
+
+  bool get hasReverse => reverseQueuedAt != null;
 
   FlashCard copyWith({
     bool? learning,
     Object? lastReview = _keep,
     int? intervalSeconds,
     double? difficulty,
+    bool? reverseLearning,
+    Object? reverseLastReview = _keep,
+    Object? reverseIntervalSeconds = _keep,
+    Object? reverseDifficulty = _keep,
+    Object? reverseQueuedAt = _keep,
   }) {
     return FlashCard(
       id: id,
@@ -162,6 +197,19 @@ final class FlashCard {
       intervalSeconds: intervalSeconds ?? this.intervalSeconds,
       difficulty: difficulty ?? this.difficulty,
       createdAt: createdAt,
+      reverseLearning: reverseLearning ?? this.reverseLearning,
+      reverseLastReview: reverseLastReview == _keep
+          ? this.reverseLastReview
+          : reverseLastReview as DateTime?,
+      reverseIntervalSeconds: reverseIntervalSeconds == _keep
+          ? this.reverseIntervalSeconds
+          : reverseIntervalSeconds as int?,
+      reverseDifficulty: reverseDifficulty == _keep
+          ? this.reverseDifficulty
+          : reverseDifficulty as double?,
+      reverseQueuedAt: reverseQueuedAt == _keep
+          ? this.reverseQueuedAt
+          : reverseQueuedAt as DateTime?,
     );
   }
 
@@ -176,7 +224,12 @@ final class FlashCard {
         other.lastReview == lastReview &&
         other.intervalSeconds == intervalSeconds &&
         other.difficulty == difficulty &&
-        other.createdAt == createdAt;
+        other.createdAt == createdAt &&
+        other.reverseLearning == reverseLearning &&
+        other.reverseLastReview == reverseLastReview &&
+        other.reverseIntervalSeconds == reverseIntervalSeconds &&
+        other.reverseDifficulty == reverseDifficulty &&
+        other.reverseQueuedAt == reverseQueuedAt;
   }
 
   @override
@@ -190,6 +243,11 @@ final class FlashCard {
     intervalSeconds,
     difficulty,
     createdAt,
+    reverseLearning,
+    reverseLastReview,
+    reverseIntervalSeconds,
+    reverseDifficulty,
+    reverseQueuedAt,
   );
 }
 
@@ -207,6 +265,7 @@ final class ReviewRecord {
     required this.difficultyAfter,
     required this.learningBefore,
     required this.learningAfter,
+    this.face = StudyFace.forward,
   });
 
   final String cardId;
@@ -218,6 +277,9 @@ final class ReviewRecord {
   final double difficultyAfter;
   final bool learningBefore;
   final bool learningAfter;
+
+  /// The face this review graded. Undo shows this face again.
+  final StudyFace face;
 }
 
 /// The card before and after one grade. [before] is the undo snapshot.
@@ -255,9 +317,14 @@ sealed class Selection {
 }
 
 final class CardSelected extends Selection {
-  const CardSelected(this.card, {required this.admitted});
+  const CardSelected(
+    this.card, {
+    this.face = StudyFace.forward,
+    required this.admitted,
+  });
 
   final FlashCard card;
+  final StudyFace face;
   final bool admitted;
 }
 
@@ -274,19 +341,30 @@ int randomWeightDraw(int total, [math.Random? random]) {
   return (random ?? math.Random()).nextInt(total);
 }
 
-/// Updates [card] for one Correct or Wrong answer at [now].
+/// Updates one face of [card] for one Correct or Wrong answer at [now].
+///
+/// The other face is left as it was. A reverse grade requires [card.hasReverse].
 GradeResult gradeCard({
   required FlashCard card,
   required GradeOutcome outcome,
   required DateTime now,
   required SchedulerParameters parameters,
+  StudyFace face = StudyFace.forward,
 }) {
   parameters.validate();
-  final next = switch (outcome) {
-    GradeOutcome.correct => _gradeCorrect(card, parameters),
-    GradeOutcome.wrong => _gradeWrong(card, parameters),
+  if (face == StudyFace.reverse && !card.hasReverse) {
+    throw StateError('Card ${card.id} has no reverse face');
+  }
+  final graded = switch (face) {
+    StudyFace.forward => switch (outcome) {
+      GradeOutcome.correct => _gradeCorrect(card, parameters),
+      GradeOutcome.wrong => _gradeWrong(card, parameters),
+    },
+    StudyFace.reverse => _gradeReverse(card, outcome, parameters),
   };
-  final after = next.copyWith(lastReview: now);
+  final after = face == StudyFace.forward
+      ? graded.copyWith(lastReview: now)
+      : graded.copyWith(reverseLastReview: now);
   return GradeResult(
     before: card,
     after: after,
@@ -294,14 +372,136 @@ GradeResult gradeCard({
       cardId: card.id,
       reviewedAt: now,
       outcome: outcome,
-      intervalBefore: card.intervalSeconds,
-      intervalAfter: after.intervalSeconds,
-      difficultyBefore: card.difficulty,
-      difficultyAfter: after.difficulty,
-      learningBefore: card.learning,
-      learningAfter: after.learning,
+      face: face,
+      intervalBefore: scheduledInterval(card, face),
+      intervalAfter: scheduledInterval(after, face),
+      difficultyBefore: scheduledDifficulty(card, face),
+      difficultyAfter: scheduledDifficulty(after, face),
+      learningBefore: scheduledLearning(card, face),
+      learningAfter: scheduledLearning(after, face),
     ),
   );
+}
+
+/// True when this correct answer is the one that cleared the forward face.
+bool forwardJustGraduated({
+  required FlashCard before,
+  required FlashCard after,
+  required SchedulerParameters parameters,
+}) {
+  return before.learning && cardIsLearned(after, parameters);
+}
+
+/// Attaches a new reverse face at the initial interval and difficulty.
+///
+/// [queuedAt] is the place in the new-face line. A later timestamp is closer
+/// to the front. Throws when the card already has a reverse face.
+FlashCard spawnReverseFace(FlashCard card, {required DateTime queuedAt}) {
+  if (card.hasReverse) {
+    throw StateError('Card ${card.id} already has a reverse face');
+  }
+  return card.copyWith(
+    reverseLearning: false,
+    reverseLastReview: null,
+    reverseIntervalSeconds: SchedulerConstants.initialIntervalSeconds,
+    reverseDifficulty: SchedulerConstants.initialDifficulty,
+    reverseQueuedAt: queuedAt,
+  );
+}
+
+/// Queue time for a reverse just created by a graduation.
+///
+/// It is a whole UTC second strictly after [now] and strictly after every
+/// existing queue time, so the new face is the head of the waiting-reverse
+/// line. Whole seconds are required because SQLite stores these timestamps
+/// at second resolution.
+DateTime nextReverseQueuedAt(Iterable<DateTime?> existing, DateTime now) {
+  var head = _wholeUtcSecond(now);
+  for (final queued in existing) {
+    if (queued == null) continue;
+    final secs = _wholeUtcSecond(queued);
+    if (!secs.isBefore(head)) head = secs;
+  }
+  return head.add(const Duration(seconds: 1));
+}
+
+/// Exclusive upper bound for reverses created when a topic switch turns on.
+///
+/// Every assigned timestamp is a whole UTC second before this and before
+/// every existing queue time, so a later graduation still cuts in front of
+/// the backfill.
+DateTime reverseBackfillCeiling(Iterable<DateTime?> existing, DateTime now) {
+  var ceiling = _wholeUtcSecond(now);
+  for (final queued in existing) {
+    if (queued == null) continue;
+    final secs = _wholeUtcSecond(queued);
+    if (secs.isBefore(ceiling)) ceiling = secs;
+  }
+  return ceiling;
+}
+
+DateTime _wholeUtcSecond(DateTime value) {
+  final utc = value.toUtc();
+  return DateTime.utc(
+    utc.year,
+    utc.month,
+    utc.day,
+    utc.hour,
+    utc.minute,
+    utc.second,
+  );
+}
+
+/// Orders [learnedWithoutReverse] so the card known longest is closest to
+/// [ceiling], then gives each one a fresh reverse face.
+///
+/// [ceiling] comes from [reverseBackfillCeiling]. Cards are not mutated.
+List<FlashCard> queueReverseBackfill(
+  List<FlashCard> learnedWithoutReverse, {
+  required DateTime ceiling,
+}) {
+  final ordered = [...learnedWithoutReverse]
+    ..sort((a, b) {
+      final byReview = a.lastReview!.compareTo(b.lastReview!);
+      if (byReview != 0) return byReview;
+      return a.id.compareTo(b.id);
+    });
+  final queued = <FlashCard>[];
+  var cursor = _wholeUtcSecond(ceiling);
+  for (final card in ordered) {
+    cursor = cursor.subtract(const Duration(seconds: 1));
+    queued.add(spawnReverseFace(card, queuedAt: cursor));
+  }
+  return queued;
+}
+
+bool scheduledLearning(FlashCard card, StudyFace face) {
+  return face == StudyFace.forward ? card.learning : card.reverseLearning;
+}
+
+DateTime? scheduledLastReview(FlashCard card, StudyFace face) {
+  return face == StudyFace.forward ? card.lastReview : card.reverseLastReview;
+}
+
+int scheduledInterval(FlashCard card, StudyFace face) {
+  return face == StudyFace.forward
+      ? card.intervalSeconds
+      : card.reverseIntervalSeconds!;
+}
+
+double scheduledDifficulty(FlashCard card, StudyFace face) {
+  return face == StudyFace.forward ? card.difficulty : card.reverseDifficulty!;
+}
+
+/// Faces that take a window seat or can be selected.
+///
+/// The reverse face is included only when the card's own topic has the
+/// switch on and the face exists.
+List<StudyFace> facesInPlay(FlashCard card, {required bool reverseDrill}) {
+  if (reverseDrill && card.hasReverse) {
+    return const [StudyFace.forward, StudyFace.reverse];
+  }
+  return const [StudyFace.forward];
 }
 
 FlashCard _gradeCorrect(FlashCard card, SchedulerParameters parameters) {
@@ -321,6 +521,34 @@ FlashCard _gradeWrong(FlashCard card, SchedulerParameters parameters) {
     intervalSeconds: interval,
     difficulty: difficulty,
     learning: true,
+  );
+}
+
+/// Applies the forward grade math to the reverse schedule only.
+FlashCard _gradeReverse(
+  FlashCard card,
+  GradeOutcome outcome,
+  SchedulerParameters parameters,
+) {
+  final projected = FlashCard(
+    id: card.id,
+    topicId: card.topicId,
+    front: card.front,
+    back: card.back,
+    learning: card.reverseLearning,
+    lastReview: card.reverseLastReview,
+    intervalSeconds: card.reverseIntervalSeconds!,
+    difficulty: card.reverseDifficulty!,
+    createdAt: card.createdAt,
+  );
+  final graded = switch (outcome) {
+    GradeOutcome.correct => _gradeCorrect(projected, parameters),
+    GradeOutcome.wrong => _gradeWrong(projected, parameters),
+  };
+  return card.copyWith(
+    reverseLearning: graded.learning,
+    reverseIntervalSeconds: graded.intervalSeconds,
+    reverseDifficulty: graded.difficulty,
   );
 }
 
@@ -346,12 +574,14 @@ int _shrink(int intervalSeconds, double factor) {
   return math.max(next, SchedulerConstants.minimumIntervalSeconds);
 }
 
-/// Chooses the next card in [scopeTopicId], or the whole library when that
+/// Chooses the next face in [scopeTopicId], or the whole library when that
 /// is null. Does not read a clock or a random source itself.
 ///
 /// When the result is [CardSelected] with `admitted` true, the returned card
-/// has `learning` set and must replace the caller's copy before the next
-/// select. Otherwise the same new card would be admitted again.
+/// has that face's learning flag set and must replace the caller's copy
+/// before the next select. Otherwise the same new face would be admitted again.
+///
+/// With no reverse faces in play this is the same choice as a card-only draw.
 Selection selectCard({
   required List<Topic> topics,
   required List<FlashCard> cards,
@@ -362,35 +592,36 @@ Selection selectCard({
 }) {
   parameters.validate();
   final scope = topicIdsInScope(topics, scopeTopicId);
-  final inScope = [
+  final topicById = {for (final topic in topics) topic.id: topic};
+  final faces = <_Face>[
     for (final card in cards)
-      if (scope.contains(card.topicId)) card,
+      if (scope.contains(card.topicId))
+        ..._facesOf(card, topicById[card.topicId]),
   ];
 
   final dueLearned = [
-    for (final card in inScope)
-      if (cardIsLearned(card, parameters) && cardIsDue(card, now)) card,
-  ]..sort((a, b) => _compareDue(a, b, now));
+    for (final face in faces)
+      if (face.isLearned(parameters) && face.isDue(now)) face,
+  ]..sort((a, b) => _compareDueFaces(a, b, now));
   if (dueLearned.isNotEmpty) {
-    return CardSelected(dueLearned.first, admitted: false);
+    final chosen = dueLearned.first;
+    return CardSelected(chosen.card, face: chosen.direction, admitted: false);
   }
 
   final learning = [
-    for (final card in inScope)
-      if (card.learning) card,
-  ]..sort(_compareMostRecentFirst);
-  final fresh = [
-    for (final card in inScope)
-      if (card.isNew) card,
-  ]..sort(_compareNewCards);
+    for (final face in faces)
+      if (face.learning) face,
+  ]..sort(_compareLearningFaces);
+  final nextNew = _nextNewFace(faces);
 
   final learningCount = learning.length;
   final includeNew =
-      learningCount < parameters.learningWindowSize && fresh.isNotEmpty;
+      learningCount < parameters.learningWindowSize && nextNew != null;
 
   if (learningCount == 0) {
     if (!includeNew) return const SessionClear();
-    return CardSelected(fresh.first.copyWith(learning: true), admitted: true);
+    final fresh = nextNew;
+    return CardSelected(_admit(fresh), face: fresh.direction, admitted: true);
   }
 
   final candidates = <_Candidate>[
@@ -398,7 +629,7 @@ Selection selectCard({
       _Candidate(learning[rank], rank),
   ];
   if (includeNew) {
-    candidates.add(_Candidate(fresh.first, learningCount, admit: true));
+    candidates.add(_Candidate(nextNew, learningCount, admit: true));
   }
 
   final total = candidates.fold<int>(
@@ -406,7 +637,8 @@ Selection selectCard({
     (sum, candidate) => sum + candidate.weight,
   );
   if (total == 0) {
-    return CardSelected(learning.single, admitted: false);
+    final only = learning.single;
+    return CardSelected(only.card, face: only.direction, admitted: false);
   }
 
   final picked = draw(total);
@@ -417,21 +649,84 @@ Selection selectCard({
   for (final candidate in candidates) {
     cumulative += candidate.weight;
     if (cumulative > picked) {
-      final card = candidate.admit
-          ? candidate.card.copyWith(learning: true)
-          : candidate.card;
-      return CardSelected(card, admitted: candidate.admit);
+      final face = candidate.face;
+      final card = candidate.admit ? _admit(face) : face.card;
+      return CardSelected(
+        card,
+        face: face.direction,
+        admitted: candidate.admit,
+      );
     }
   }
   throw StateError('weight draw missed every candidate');
 }
 
 final class _Candidate {
-  const _Candidate(this.card, this.weight, {this.admit = false});
+  const _Candidate(this.face, this.weight, {this.admit = false});
 
-  final FlashCard card;
+  final _Face face;
   final int weight;
   final bool admit;
+}
+
+final class _Face {
+  const _Face(this.card, this.direction);
+
+  final FlashCard card;
+  final StudyFace direction;
+
+  bool get learning => scheduledLearning(card, direction);
+
+  DateTime? get lastReview => scheduledLastReview(card, direction);
+
+  int get intervalSeconds => scheduledInterval(card, direction);
+
+  bool get isNew => !learning && lastReview == null;
+
+  bool isLearned(SchedulerParameters parameters) {
+    return !learning &&
+        lastReview != null &&
+        Duration(seconds: intervalSeconds) > parameters.learnedThreshold;
+  }
+
+  bool isDue(DateTime now) {
+    final reviewed = lastReview;
+    if (reviewed == null) return false;
+    final dueAt = reviewed.add(Duration(seconds: intervalSeconds));
+    return !dueAt.isAfter(now);
+  }
+}
+
+List<_Face> _facesOf(FlashCard card, Topic? topic) {
+  return [
+    for (final direction in facesInPlay(
+      card,
+      reverseDrill: topic?.reverseDrill ?? false,
+    ))
+      _Face(card, direction),
+  ];
+}
+
+FlashCard _admit(_Face face) {
+  return face.direction == StudyFace.forward
+      ? face.card.copyWith(learning: true)
+      : face.card.copyWith(reverseLearning: true);
+}
+
+/// The one new face that may join the draw: the head waiting reverse, or
+/// the oldest never-started card when no reverse is waiting.
+_Face? _nextNewFace(List<_Face> faces) {
+  final reverses = [
+    for (final face in faces)
+      if (face.direction == StudyFace.reverse && face.isNew) face,
+  ]..sort(_compareWaitingReverses);
+  if (reverses.isNotEmpty) return reverses.first;
+  final fresh = [
+    for (final face in faces)
+      if (face.direction == StudyFace.forward && face.isNew) face,
+  ]..sort(_compareNewFaces);
+  if (fresh.isEmpty) return null;
+  return fresh.first;
 }
 
 /// Topic ids in [scopeTopicId] plus descendants. Null means every topic passed in.
@@ -460,20 +755,27 @@ Set<String> topicIdsInScope(List<Topic> topics, String? scopeTopicId) {
 
 /// Learned means not in the window, reviewed at least once, and interval strictly above the threshold.
 bool cardIsLearned(FlashCard card, SchedulerParameters parameters) {
-  return !card.learning &&
-      card.lastReview != null &&
-      Duration(seconds: card.intervalSeconds) > parameters.learnedThreshold;
+  return faceIsLearned(card, StudyFace.forward, parameters);
 }
 
 /// Due when the review time plus the interval is at or before [now].
 bool cardIsDue(FlashCard card, DateTime now) {
-  final reviewed = card.lastReview;
-  if (reviewed == null) return false;
-  final dueAt = reviewed.add(Duration(seconds: card.intervalSeconds));
-  return !dueAt.isAfter(now);
+  return faceIsDue(card, StudyFace.forward, now);
 }
 
-int _compareDue(FlashCard a, FlashCard b, DateTime now) {
+bool faceIsLearned(
+  FlashCard card,
+  StudyFace face,
+  SchedulerParameters parameters,
+) {
+  return _Face(card, face).isLearned(parameters);
+}
+
+bool faceIsDue(FlashCard card, StudyFace face, DateTime now) {
+  return _Face(card, face).isDue(now);
+}
+
+int _compareDueFaces(_Face a, _Face b, DateTime now) {
   final byRatio = _overdueRatio(b, now).compareTo(_overdueRatio(a, now));
   if (byRatio != 0) return byRatio;
   final byLateness = _absoluteLateness(
@@ -481,24 +783,26 @@ int _compareDue(FlashCard a, FlashCard b, DateTime now) {
     now,
   ).compareTo(_absoluteLateness(a, now));
   if (byLateness != 0) return byLateness;
-  final byCreated = a.createdAt.compareTo(b.createdAt);
+  final byCreated = a.card.createdAt.compareTo(b.card.createdAt);
   if (byCreated != 0) return byCreated;
-  return a.id.compareTo(b.id);
+  final byId = a.card.id.compareTo(b.card.id);
+  if (byId != 0) return byId;
+  return a.direction.index.compareTo(b.direction.index);
 }
 
-double _overdueRatio(FlashCard card, DateTime now) {
-  final elapsed = now.difference(card.lastReview!).inMicroseconds;
-  final interval = Duration(seconds: card.intervalSeconds).inMicroseconds;
+double _overdueRatio(_Face face, DateTime now) {
+  final elapsed = now.difference(face.lastReview!).inMicroseconds;
+  final interval = Duration(seconds: face.intervalSeconds).inMicroseconds;
   return elapsed / interval;
 }
 
-int _absoluteLateness(FlashCard card, DateTime now) {
-  final dueAt = card.lastReview!.add(Duration(seconds: card.intervalSeconds));
+int _absoluteLateness(_Face face, DateTime now) {
+  final dueAt = face.lastReview!.add(Duration(seconds: face.intervalSeconds));
   return now.difference(dueAt).inMicroseconds;
 }
 
 /// Negative when [a] was reviewed more recently than [b].
-int _compareMostRecentFirst(FlashCard a, FlashCard b) {
+int _compareLearningFaces(_Face a, _Face b) {
   final aReview = a.lastReview;
   final bReview = b.lastReview;
   if (aReview == null && bReview != null) return 1;
@@ -507,13 +811,22 @@ int _compareMostRecentFirst(FlashCard a, FlashCard b) {
     final byReview = bReview.compareTo(aReview);
     if (byReview != 0) return byReview;
   }
-  final byCreated = b.createdAt.compareTo(a.createdAt);
+  final byCreated = b.card.createdAt.compareTo(a.card.createdAt);
   if (byCreated != 0) return byCreated;
-  return b.id.compareTo(a.id);
+  final byId = b.card.id.compareTo(a.card.id);
+  if (byId != 0) return byId;
+  return a.direction.index.compareTo(b.direction.index);
 }
 
-int _compareNewCards(FlashCard a, FlashCard b) {
-  final byCreated = a.createdAt.compareTo(b.createdAt);
+int _compareNewFaces(_Face a, _Face b) {
+  final byCreated = a.card.createdAt.compareTo(b.card.createdAt);
   if (byCreated != 0) return byCreated;
-  return a.id.compareTo(b.id);
+  return a.card.id.compareTo(b.card.id);
+}
+
+/// Later queue time first. That is the reverse a graduation just created.
+int _compareWaitingReverses(_Face a, _Face b) {
+  final byQueue = b.card.reverseQueuedAt!.compareTo(a.card.reverseQueuedAt!);
+  if (byQueue != 0) return byQueue;
+  return a.card.id.compareTo(b.card.id);
 }

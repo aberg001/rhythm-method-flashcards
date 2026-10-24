@@ -227,9 +227,9 @@ void main() {
       await settle(tester);
 
       expect(find.text('Nothing is due.'), findsNothing);
-      expect(faceText('hola'), findsOneWidget);
+      expect(faceText('hola'), findsNothing);
       expect(faceText('hello'), findsOneWidget);
-      expect(flipButton(tester).onPressed, isNull);
+      expect(flipButton(tester).onPressed, isNotNull);
       expect(correctButton(tester).onPressed, isNotNull);
       final restored = await repository.card('c');
       expect(restored.intervalSeconds, 3038);
@@ -288,7 +288,7 @@ void main() {
     await tester.pump();
     await settle(tester);
 
-    expect(faceText('overdue'), findsOneWidget);
+    expect(faceText('overdue'), findsNothing);
     expect(faceText('overdue-back'), findsOneWidget);
     expect(find.text('drilling'), findsNothing);
     final restored = await repository.card('due');
@@ -425,14 +425,159 @@ void main() {
 
     await tester.tap(find.byKey(const Key('card-face')));
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
     expect(faceText('hello'), findsOneWidget);
-    expect(flipButton(tester).onPressed, isNull);
+    expect(faceText('hola'), findsNothing);
+    expect(flipButton(tester).onPressed, isNotNull);
     expect(correctButton(tester).onPressed, isNotNull);
 
     await press(tester, 'correct-button');
     expect((await repository.card('c')).intervalSeconds, 900);
     expect(faceText('hello'), findsNothing);
   });
+
+  testWidgets('flip toggles, and grading waits for one look at the answer', (
+    tester,
+  ) async {
+    await insertTopic(repository, 'topic');
+    await repository.insertCard(
+      FlashCard.fresh(
+        id: 'c',
+        topicId: 'topic',
+        front: 'hola',
+        back: 'hello',
+        createdAt: DateTime.utc(2026, 2, 1),
+      ),
+    );
+    await pumpSession(
+      tester,
+      repository,
+      title: 'Topic',
+      scopeTopicId: 'topic',
+      draw: neverDraw,
+    );
+
+    await flip(tester);
+    expect(faceText('hello'), findsOneWidget);
+    expect(sideColor(tester), const Color(0xFFB5683A));
+    await flip(tester);
+    expect(faceText('hola'), findsOneWidget);
+    expect(faceText('hello'), findsNothing);
+    expect(sideColor(tester), isNot(const Color(0xFFB5683A)));
+    await flip(tester);
+    expect(faceText('hello'), findsOneWidget);
+    await flip(tester);
+    expect(faceText('hola'), findsOneWidget);
+    expect(correctButton(tester).onPressed, isNotNull);
+
+    await flingCard(tester, const Offset(400, 0));
+    expect((await repository.card('c')).intervalSeconds, 600);
+
+    await press(tester, 'correct-button');
+    expect((await repository.card('c')).intervalSeconds, 900);
+  });
+
+  testWidgets(
+    'grade buttons enable after a flip that is still turning at the midpoint',
+    (tester) async {
+      await insertTopic(repository, 'topic');
+      await repository.insertCard(
+        FlashCard.fresh(
+          id: 'c',
+          topicId: 'topic',
+          front: 'hola',
+          back: 'hello',
+          createdAt: DateTime.utc(2026, 2, 1),
+        ),
+      );
+      await pumpSession(
+        tester,
+        repository,
+        title: 'Topic',
+        scopeTopicId: 'topic',
+        draw: neverDraw,
+      );
+
+      await tester.tap(find.byKey(const Key('flip-button')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 160));
+      expect(faceText('hello'), findsOneWidget);
+      expect(faceText('hola'), findsNothing);
+      expect(correctButton(tester).onPressed, isNull);
+      expect(wrongButton(tester).onPressed, isNull);
+
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(correctButton(tester).onPressed, isNotNull);
+      expect(wrongButton(tester).onPressed, isNotNull);
+      expect(flipButton(tester).onPressed, isNotNull);
+
+      await press(tester, 'correct-button');
+      expect((await repository.card('c')).intervalSeconds, 900);
+    },
+  );
+
+  testWidgets(
+    'a reverse face prompts with the back and grades only that face',
+    (tester) async {
+      final now = DateTime.utc(2026, 6, 1, 12);
+      await insertTopic(repository, 'topic');
+      await repository.setReverseDrill('topic', enabled: true, now: now);
+      await repository.insertCard(
+        _card(
+          id: 'learned',
+          front: 'hola',
+          back: 'hello',
+          learning: false,
+          lastReview: now,
+          intervalSeconds: 7200,
+          createdAt: DateTime.utc(2024, 1, 1),
+          difficulty: 1.4,
+        ),
+      );
+      await repository.setReverseDrill('topic', enabled: true, now: now);
+      await pumpSession(
+        tester,
+        repository,
+        title: 'Topic',
+        scopeTopicId: 'topic',
+        now: () => now,
+        draw: neverDraw,
+      );
+
+      expect(find.text('Reverse'), findsOneWidget);
+      expect(faceText('hello'), findsOneWidget);
+      expect(faceText('hola'), findsNothing);
+      expect(correctButton(tester).onPressed, isNull);
+
+      await flip(tester);
+      expect(faceText('hola'), findsOneWidget);
+      expect(faceText('hello'), findsNothing);
+      expect(sideColor(tester), const Color(0xFFB5683A));
+      expect(correctButton(tester).onPressed, isNotNull);
+
+      await press(tester, 'wrong-button');
+      final graded = await repository.card('learned');
+      expect(graded.intervalSeconds, 7200);
+      expect(graded.difficulty, 1.4);
+      expect(graded.reverseIntervalSeconds, 300);
+      expect(graded.reverseDifficulty, 1.01);
+      expect(graded.reverseLearning, isTrue);
+
+      await tester.tap(find.byKey(const Key('undo-button')));
+      await tester.pump();
+      await settle(tester);
+      expect(find.text('Reverse'), findsOneWidget);
+      expect(faceText('hola'), findsOneWidget);
+      expect(faceText('hello'), findsNothing);
+      expect(correctButton(tester).onPressed, isNotNull);
+      final restored = await repository.card('learned');
+      expect(restored.reverseIntervalSeconds, 600);
+      expect(restored.reverseDifficulty, 1);
+      expect(restored.reverseLearning, isTrue);
+      expect(restored.reverseLastReview, isNull);
+      expect(restored.intervalSeconds, 7200);
+    },
+  );
 
   testWidgets('a right swipe grades correct and shows the next front', (
     tester,
@@ -561,7 +706,7 @@ void main() {
     await tester.tap(appBarText('Save'));
     await settle(tester);
 
-    expect(faceText('buenas'), findsOneWidget);
+    expect(faceText('buenas'), findsNothing);
     expect(faceText('hello'), findsOneWidget);
     final edited = await repository.card('c');
     expect(edited.front, 'buenas');
@@ -694,6 +839,12 @@ Future<void> settle(WidgetTester tester) async {
 Future<void> flip(WidgetTester tester) async {
   await tester.tap(find.byKey(const Key('flip-button')));
   await tester.pump();
+  await tester.pump(const Duration(milliseconds: 400));
+}
+
+Color sideColor(WidgetTester tester) {
+  final card = tester.widget<Card>(find.byKey(const Key('card-face')));
+  return (card.shape! as RoundedRectangleBorder).side.color;
 }
 
 Future<void> press(WidgetTester tester, String key) async {

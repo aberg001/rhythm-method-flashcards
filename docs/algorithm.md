@@ -114,7 +114,7 @@ Worked lapse. A learned card with a 4 hour interval is answered wrong. The inter
 
 ## Selection
 
-`select(scope, now, draw)` returns a card or "session clear". Recency comes from `last_review`, so it survives leaving the app. There is no separate "last three cards" list.
+`select(scope, now, draw)` returns a face or "session clear". With the reverse drill off, each card is one face and the steps below are unchanged. [Reverse faces](#reverse-faces) says which faces are in the draw. Recency comes from that face's `last_review`, so it survives leaving the app. There is no separate "last three cards" list.
 
 Weights are integers. `draw` returns an integer uniformly in `0 .. total - 1` for a caller-supplied total. Tests inject that integer. Production uses a uniform source. A weight of 0 is never chosen while the total is positive: walk candidates in order and take the first whose cumulative weight is greater than the draw.
 
@@ -157,7 +157,38 @@ Consequences the tests should lock:
 - Once `L = W`, the new card is not a candidate. New cards wait until a learning card graduates and frees a seat. After one graduation, `L = W - 1` and the admission probability is `2 / W`.
 - While one learning card exists and a new card is waiting, the next draw always admits that new card. A lone card is not drilled until a second card has joined, or until no new card remains. With a window of 1 this does not arise, because the seat is full after the first admission and the single card is then repeated.
 
-The window is counted inside the current scope, not across the whole library. Studying two topics separately gives each pile its own seats. A card marked learning still occupies a seat in every scope that contains it. Studying a parent topic counts learning cards in that topic and its descendants together. Studying all topics counts every learning card in the library. If that count is already at `W`, no further new card is admitted until one graduates.
+The window is counted inside the current scope, not across the whole library. Seats are faces, so a card whose forward face has lapsed and whose reverse face is learning holds two. Studying two topics separately gives each pile its own seats. A face marked learning still occupies a seat in every scope that contains it. Studying a parent topic counts learning faces in that topic and its descendants together. Studying all topics counts every learning face in the library. If that count is already at `W`, no further new face is admitted until one graduates.
+
+## Reverse faces
+
+A topic may drill a card back to front after the forward face is learned. The switch is stored on that topic. It is off until the user turns it on, and it does not pass to subtopics. A card follows the switch on its own topic, including when the session scope is a parent topic or the whole library.
+
+The reverse face has its own `learning`, `last_review`, `interval`, and `difficulty`. A null queue timestamp means the face does not exist. Creating one sets `learning` false, `last_review` null, `interval` to `I_0`, and `difficulty` to 1.0. It does not copy the forward face. A grade on one face does not change the other.
+
+The face is created only when the switch is on and the card does not have one yet:
+
+- The forward face just graduated. This correct answer cleared `learning` because the interval is now strictly above `T`.
+- The user turns the switch on, and the forward face is already learned. Every such card in that topic gains a face. Cards known longest, measured by the oldest forward `last_review`, are placed ahead of cards learned more recently.
+
+Turning the switch off stops creating faces and stops selecting them. They leave the window count. Their stored state remains. Turning the switch on again resumes them, and backfills learned cards that still have no face.
+
+Queue order among waiting reverses puts the newest graduation at the front. Timestamps are whole UTC seconds, because that is the resolution SQLite stores:
+
+- A face created by a graduation is strictly after every queue time already stored, so it is the head of the line.
+- A backfill sits behind reverses that were already queued. Inside the backfill, the longest-known card is ahead.
+- A later graduation still cuts in front of that backfill. A run of graduations keeps putting the newest reverse at the front. Ordinary new cards wait behind every waiting reverse.
+
+Selection is the same three steps, applied to faces that are in play. The forward face is always in play. The reverse face is in play only when the card's own topic has the switch on and the queue timestamp is set.
+
+1. Due learned faces, ordered as due learned cards are ordered. When the ratio, the lateness, `created_at`, and `id` all tie, the forward face comes first.
+2. `L` is the number of in-play learning faces. One card can hold two seats. The new face that may join the draw is the waiting reverse at the head of the queue, or, when none is waiting, the oldest never-started card. The weights do not change.
+3. The session is clear when no in-play face is due, learning, or new.
+
+A full window admits nobody, including a waiting reverse. A waiting reverse does not skip the window and does not outrank a due learned face. While `L` is 0 or 1 and a new face is waiting, the next draw admits that face.
+
+In study, a reverse prompt is the card's back and the answer is the card's front. The border still means prompt versus answer. The card shows a Reverse label. Flip works the same way. The review row records the direction. Undo writes the pre-grade snapshot of the whole card back and shows the graded face on the answer side. Undo of the graduation that created a reverse removes that face, because the snapshot was taken before it existed. Undo does not un-admit.
+
+Status numbers count in-play faces. A waiting reverse counts as a new card. The sentence stays in the form in the next section. One card can contribute to two of those counts.
 
 ## What the interval means
 
@@ -169,9 +200,9 @@ Nothing in the rules ends a session while learning cards remain. The user stops 
 
 ## Study session and undo
 
-A session loops: select, show the front, wait for Flip (tap or the Flip button), show the back, wait for Correct or Wrong (button or swipe), grade, persist, repeat. Swipes and the Wrong and Correct buttons do nothing until the card has been flipped. Edit opens the card editor and does not change schedule fields. Leaving the session and coming back uses the persisted `learning` flags, intervals, difficulties, and `last_review` times. Those timestamps are the recency ranks, so the weighted draw continues where it left off.
+A session loops: select, show the prompt, and let the user flip as many times as they want before grading. The first completed reveal of the answer unlocks Wrong and Correct. Those buttons stay available if the card is turned back to the prompt. Swipes grade only while the answer is showing, and only after that first reveal. A turn that is still moving does not grade. Edit opens the card editor and does not change schedule fields. Leaving the session and coming back uses the persisted `learning` flags, intervals, difficulties, and `last_review` times. Those timestamps are the recency ranks, so the weighted draw continues where it left off.
 
-Every grade appends a review row: card id, time, outcome, and the before and after values of interval, difficulty, and the learning flag. Undo pops the latest grade in this session, writes the before-values back onto the card, deletes that review row, and shows that card again, already flipped, ready to grade again. Undo does not un-admit a card and does not undo Edit. The undo stack is the session's grades, newest first, so more than one undo works.
+Every grade appends a review row: card id, time, outcome, the face that was graded, and the before and after values of that face's interval, difficulty, and learning flag. Undo pops the latest grade in this session, writes the before-values back onto the card, deletes that review row, and shows that same face again on the answer side, ready to grade, without replaying the turn. Undo does not un-admit a card and does not undo Edit. The undo stack is the session's grades, newest first, so more than one undo works.
 
 ## Invariants
 
@@ -192,6 +223,9 @@ Each of these is a unit test with a fake clock and a scripted draw. Where a prob
 13. A card outside the scope is never returned. A child topic's cards are in the parent scope. They are not in a sibling scope.
 14. Undo restores interval, difficulty, `learning`, and `last_review` to the pre-grade snapshot.
 15. Admitting a card sets `learning` true before the grade. A second select does not admit it again.
+16. A grade on one face does not change the other face's interval, difficulty, learning flag, or last review. A new reverse face starts at `I_0` and difficulty 1.0.
+17. Among new faces, every waiting reverse comes before every never-started card. A graduation's reverse is the head of that line. A backfill is behind reverses already queued, and within the backfill the oldest forward `last_review` is ahead. A later graduation cuts in front of the backfill.
+18. With the switch off, reverse faces are not selected and do not count toward the window. A due learned face outranks a waiting reverse. A full window admits no reverse. Two learning faces on one card occupy two seats. A card uses the switch on its own topic.
 
 ## Decisions
 

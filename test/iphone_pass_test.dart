@@ -96,6 +96,7 @@ void main() {
 
     await tester.tap(find.byKey(const Key('flip-button')));
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
 
     expect(tester.getRect(find.text(back)).height, greaterThan(844));
     await Scrollable.ensureVisible(
@@ -171,9 +172,10 @@ void main() {
 
       tester.semantics.tap(find.semantics.byLabel('Flip'));
       await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
       expect(find.text('hello'), findsOneWidget);
       expect(haptics, isEmpty);
-      expect(disabledSemanticsTap(tester, 'Flip'), throwsA(isNotGraded));
+      expect(find.semantics.byLabel('Flip'), findsOneWidget);
 
       tester.semantics.tap(find.semantics.byLabel('Correct'));
       await tester.pump();

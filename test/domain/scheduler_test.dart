@@ -747,6 +747,405 @@ void main() {
     });
   });
 
+  group('reverse faces', () {
+    test('a grade on one face leaves the other face alone', () {
+      final card = spawnReverseFace(
+        learnedCard(
+          id: 'both',
+          interval: const Duration(hours: 4),
+          lastReview: now.subtract(const Duration(days: 1)),
+        ).copyWith(difficulty: 2),
+        queuedAt: now,
+      );
+
+      final wrong = gradeCard(
+        card: card,
+        outcome: GradeOutcome.wrong,
+        now: now,
+        parameters: parameters,
+        face: StudyFace.reverse,
+      );
+
+      expect(wrong.after.intervalSeconds, card.intervalSeconds);
+      expect(wrong.after.difficulty, card.difficulty);
+      expect(wrong.after.learning, card.learning);
+      expect(wrong.after.lastReview, card.lastReview);
+      expect(wrong.after.reverseIntervalSeconds, 300);
+      expect(wrong.after.reverseDifficulty, 1.01);
+      expect(wrong.after.reverseLearning, isTrue);
+      expect(wrong.after.reverseLastReview, now);
+      expect(wrong.review.face, StudyFace.reverse);
+      expect(wrong.review.intervalBefore, 600);
+
+      final forward = gradeCard(
+        card: card,
+        outcome: GradeOutcome.correct,
+        now: now,
+        parameters: parameters,
+      );
+      expect(forward.after.reverseIntervalSeconds, 600);
+      expect(forward.after.reverseDifficulty, 1);
+      expect(forward.after.reverseLearning, isFalse);
+      expect(forward.after.reverseLastReview, isNull);
+      expect(forward.review.face, StudyFace.forward);
+    });
+
+    test('a new reverse starts at ten minutes and difficulty 1', () {
+      final forward = learnedCard(
+        interval: const Duration(hours: 6),
+        lastReview: now,
+      ).copyWith(difficulty: 4);
+      final spawned = spawnReverseFace(forward, queuedAt: now);
+      expect(spawned.reverseLearning, isFalse);
+      expect(spawned.reverseLastReview, isNull);
+      expect(spawned.reverseIntervalSeconds, 600);
+      expect(spawned.reverseDifficulty, 1);
+      expect(spawned.difficulty, 4);
+      expect(() => spawnReverseFace(spawned, queuedAt: now), throwsStateError);
+    });
+
+    test('graduations cut in front of a longest-known-first backfill', () {
+      final first = nextReverseQueuedAt(const [], now);
+      final second = nextReverseQueuedAt([first], now);
+      expect(second.isAfter(first), isTrue);
+      expect(second.difference(first), const Duration(seconds: 1));
+
+      final older = learnedCard(
+        id: 'older',
+        interval: const Duration(hours: 2),
+        lastReview: DateTime.utc(2020, 1, 1),
+      );
+      final newer = learnedCard(
+        id: 'newer',
+        interval: const Duration(hours: 2),
+        lastReview: DateTime.utc(2025, 1, 1),
+      );
+      final ceiling = reverseBackfillCeiling([first, second], now);
+      final backfill = queueReverseBackfill([newer, older], ceiling: ceiling);
+      final olderAt = backfill
+          .singleWhere((card) => card.id == 'older')
+          .reverseQueuedAt!;
+      final newerAt = backfill
+          .singleWhere((card) => card.id == 'newer')
+          .reverseQueuedAt!;
+      expect(olderAt.isAfter(newerAt), isTrue);
+      expect(olderAt.isBefore(first), isTrue);
+      expect(newerAt.isBefore(first), isTrue);
+
+      final later = nextReverseQueuedAt([first, second, olderAt, newerAt], now);
+      expect(later.isAfter(second), isTrue);
+      expect(later.isAfter(olderAt), isTrue);
+    });
+
+    test('a waiting reverse is admitted ahead of a never-started card', () {
+      final topics = [topic(reverse: true)];
+      final waiting = spawnReverseFace(
+        learnedCard(
+          id: 'known',
+          interval: const Duration(days: 2),
+          lastReview: now,
+        ),
+        queuedAt: DateTime.utc(2026, 5, 1),
+      );
+      final fresh = freshCard(id: 'plain', createdAt: DateTime.utc(2020, 1, 1));
+      final selected =
+          selectCard(
+                topics: topics,
+                cards: [fresh, waiting],
+                scopeTopicId: null,
+                now: now,
+                parameters: parameters,
+                draw: (_) => fail('an empty window does not draw'),
+              )
+              as CardSelected;
+
+      expect(selected.face, StudyFace.reverse);
+      expect(selected.admitted, isTrue);
+      expect(selected.card.id, 'known');
+      expect(selected.card.reverseLearning, isTrue);
+      expect(selected.card.learning, isFalse);
+      expect(waiting.reverseLearning, isFalse);
+    });
+
+    test('the newest waiting reverse stays ahead of an older one', () {
+      final topics = [topic(reverse: true)];
+      final older = spawnReverseFace(
+        learnedCard(
+          id: 'older',
+          interval: const Duration(days: 2),
+          lastReview: now,
+        ),
+        queuedAt: DateTime.utc(2026, 4, 1),
+      );
+      final newer = spawnReverseFace(
+        learnedCard(
+          id: 'newer',
+          interval: const Duration(days: 2),
+          lastReview: now,
+        ),
+        queuedAt: DateTime.utc(2026, 5, 1),
+      );
+      final fresh = freshCard(id: 'plain');
+      final first =
+          selectCard(
+                topics: topics,
+                cards: [older, fresh, newer],
+                scopeTopicId: null,
+                now: now,
+                parameters: parameters,
+                draw: (_) => fail('an empty window does not draw'),
+              )
+              as CardSelected;
+      expect(first.card.id, 'newer');
+      expect(first.face, StudyFace.reverse);
+
+      final admitted = first.card;
+      final second =
+          selectCard(
+                topics: topics,
+                cards: [older, fresh, admitted],
+                scopeTopicId: null,
+                now: now,
+                parameters: parameters,
+                draw: (total) {
+                  expect(total, 1);
+                  return 0;
+                },
+              )
+              as CardSelected;
+      expect(second.card.id, 'older');
+      expect(second.face, StudyFace.reverse);
+      expect(second.admitted, isTrue);
+    });
+
+    test('the switch off leaves a reverse out of the draw and the window', () {
+      final hidden = spawnReverseFace(
+        learnedCard(
+          id: 'known',
+          interval: const Duration(days: 2),
+          lastReview: now,
+        ),
+        queuedAt: now,
+      ).copyWith(reverseLearning: true, reverseLastReview: now);
+      final fresh = freshCard(id: 'plain');
+      final selected =
+          selectCard(
+                topics: [topic()],
+                cards: [hidden, fresh],
+                scopeTopicId: null,
+                now: now,
+                parameters: parameters,
+                draw: (_) => fail('an empty window does not draw'),
+              )
+              as CardSelected;
+      expect(selected.card.id, 'plain');
+      expect(selected.face, StudyFace.forward);
+    });
+
+    test('a due learned face outranks a waiting reverse', () {
+      final due = learnedCard(
+        id: 'due',
+        interval: const Duration(hours: 2),
+        lastReview: now.subtract(const Duration(hours: 3)),
+      );
+      final waiting = spawnReverseFace(
+        learnedCard(
+          id: 'known',
+          interval: const Duration(days: 4),
+          lastReview: now,
+        ),
+        queuedAt: now,
+      );
+      final selected =
+          selectCard(
+                topics: [topic(reverse: true)],
+                cards: [waiting, due],
+                scopeTopicId: null,
+                now: now,
+                parameters: parameters,
+                draw: (_) => fail('a due card does not draw'),
+              )
+              as CardSelected;
+      expect(selected.card.id, 'due');
+      expect(selected.face, StudyFace.forward);
+      expect(selected.admitted, isFalse);
+    });
+
+    test('a due reverse outranks a learning forward face', () {
+      final learning = freshCard(
+        id: 'drill',
+      ).copyWith(learning: true, lastReview: now);
+      final reverseDue =
+          spawnReverseFace(
+            learnedCard(
+              id: 'known',
+              interval: const Duration(days: 4),
+              lastReview: now,
+            ),
+            queuedAt: now.subtract(const Duration(days: 2)),
+          ).copyWith(
+            reverseLearning: false,
+            reverseLastReview: now.subtract(const Duration(hours: 3)),
+            reverseIntervalSeconds: const Duration(hours: 2).inSeconds,
+          );
+      final selected =
+          selectCard(
+                topics: [topic(reverse: true)],
+                cards: [learning, reverseDue],
+                scopeTopicId: null,
+                now: now,
+                parameters: parameters,
+                draw: (_) => fail('a due face does not draw'),
+              )
+              as CardSelected;
+      expect(selected.card.id, 'known');
+      expect(selected.face, StudyFace.reverse);
+    });
+
+    test('a full window admits no reverse, and two faces take two seats', () {
+      final doubled =
+          spawnReverseFace(
+            freshCard(id: 'both').copyWith(
+              learning: true,
+              lastReview: now.subtract(const Duration(minutes: 5)),
+            ),
+            queuedAt: now,
+          ).copyWith(
+            reverseLearning: true,
+            reverseLastReview: now.subtract(const Duration(minutes: 1)),
+          );
+      final fresh = freshCard(id: 'plain');
+      final window = parameters.rebuild(learningWindowSize: 2);
+      final blocked =
+          selectCard(
+                topics: [topic(reverse: true)],
+                cards: [doubled, fresh],
+                scopeTopicId: null,
+                now: now,
+                parameters: window,
+                draw: (total) {
+                  expect(total, 1);
+                  return 0;
+                },
+              )
+              as CardSelected;
+      expect(blocked.admitted, isFalse);
+      expect(blocked.card.id, 'both');
+
+      final open = parameters.rebuild(learningWindowSize: 3);
+      final admitted =
+          selectCard(
+                topics: [topic(reverse: true)],
+                cards: [doubled, fresh],
+                scopeTopicId: null,
+                now: now,
+                parameters: open,
+                draw: (total) {
+                  expect(total, 3);
+                  return 2;
+                },
+              )
+              as CardSelected;
+      expect(admitted.admitted, isTrue);
+      expect(admitted.card.id, 'plain');
+      expect(admitted.face, StudyFace.forward);
+    });
+
+    test('a card follows the switch on its own topic', () {
+      final parent = Topic(id: 'parent', name: 'parent', reverseDrill: true);
+      final child = Topic(id: 'child', name: 'child', parentId: 'parent');
+      final parentReverse = spawnReverseFace(
+        learnedCard(
+          id: 'parent-card',
+          topicId: 'parent',
+          interval: const Duration(days: 2),
+          lastReview: now,
+        ),
+        queuedAt: now,
+      );
+      final childNew = freshCard(
+        id: 'child-card',
+        topicId: 'child',
+        createdAt: DateTime.utc(2020, 1, 1),
+      );
+      final childReverse = spawnReverseFace(
+        learnedCard(
+          id: 'child-known',
+          topicId: 'child',
+          interval: const Duration(days: 2),
+          lastReview: now,
+        ),
+        queuedAt: now.add(const Duration(days: 1)),
+      );
+
+      final inParent =
+          selectCard(
+                topics: [parent, child],
+                cards: [childNew, childReverse, parentReverse],
+                scopeTopicId: 'parent',
+                now: now,
+                parameters: parameters,
+                draw: (_) => fail('an empty window does not draw'),
+              )
+              as CardSelected;
+      expect(inParent.card.id, 'parent-card');
+      expect(inParent.face, StudyFace.reverse);
+
+      final inChild =
+          selectCard(
+                topics: [parent, child],
+                cards: [childNew, childReverse],
+                scopeTopicId: 'child',
+                now: now,
+                parameters: parameters,
+                draw: (_) => fail('an empty window does not draw'),
+              )
+              as CardSelected;
+      expect(inChild.card.id, 'child-card');
+      expect(inChild.face, StudyFace.forward);
+    });
+
+    test('forward graduation is the correct answer that clears learning', () {
+      final learning = freshCard().copyWith(
+        learning: true,
+        intervalSeconds: const Duration(minutes: 50).inSeconds,
+      );
+      final graduated = gradeCard(
+        card: learning,
+        outcome: GradeOutcome.correct,
+        now: now,
+        parameters: parameters,
+      );
+      expect(
+        forwardJustGraduated(
+          before: graduated.before,
+          after: graduated.after,
+          parameters: parameters,
+        ),
+        isTrue,
+      );
+
+      final already = learnedCard(
+        interval: const Duration(hours: 2),
+        lastReview: now.subtract(const Duration(hours: 1)),
+      );
+      final again = gradeCard(
+        card: already,
+        outcome: GradeOutcome.correct,
+        now: now,
+        parameters: parameters,
+      );
+      expect(
+        forwardJustGraduated(
+          before: again.before,
+          after: again.after,
+          parameters: parameters,
+        ),
+        isFalse,
+      );
+    });
+  });
+
   test('domain does not import Flutter', () {
     final files = Directory('lib/domain').listSync(recursive: true);
     expect(files, isNotEmpty);
@@ -788,8 +1187,8 @@ FlashCard learnedCard({
   );
 }
 
-Topic topic({String id = 'topic', String? parentId}) {
-  return Topic(id: id, name: id, parentId: parentId);
+Topic topic({String id = 'topic', String? parentId, bool reverse = false}) {
+  return Topic(id: id, name: id, parentId: parentId, reverseDrill: reverse);
 }
 
 List<FlashCard> learningCards(int count, DateTime now) {

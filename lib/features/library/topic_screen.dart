@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../domain/scheduler.dart';
 import '../study/study_session_screen.dart';
 import 'card_editor_screen.dart';
+import 'card_progress.dart';
 import 'ids.dart';
 import 'library_scope.dart';
 import 'name_dialog.dart';
@@ -21,6 +22,7 @@ class TopicScreen extends StatefulWidget {
 class _TopicScreenState extends State<TopicScreen> {
   List<Topic> _topics = [];
   List<FlashCard> _cards = [];
+  SchedulerParameters _parameters = SchedulerParameters.defaults();
   var _loaded = false;
   var _generation = 0;
 
@@ -37,10 +39,12 @@ class _TopicScreenState extends State<TopicScreen> {
     final repository = LibraryScope.of(context);
     final topics = await repository.listTopics();
     final cards = await repository.listCards();
+    final parameters = await repository.loadSettings();
     if (!mounted || generation != _generation) return;
     setState(() {
       _topics = topics;
       _cards = cards;
+      _parameters = parameters;
       _loaded = true;
     });
   }
@@ -147,6 +151,33 @@ class _TopicScreenState extends State<TopicScreen> {
     await _load();
   }
 
+  Future<void> _setReverseDrill(bool enabled) async {
+    final topic = _topic;
+    if (topic == null || topic.reverseDrill == enabled) return;
+    if (enabled) {
+      final count = _ownCards
+          .where((card) => !card.hasReverse && cardIsLearned(card, _parameters))
+          .length;
+      if (count > 0) {
+        final learned = count == 1
+            ? '1 learned card will gain a back-to-front drill.'
+            : '$count learned cards will gain a back-to-front drill.';
+        final confirmed = await showConfirmDialog(
+          context,
+          title: 'Drill these backs?',
+          message: '$learned Those drills wait ahead of cards not yet started.',
+          confirmLabel: 'Turn on',
+        );
+        if (!confirmed || !mounted) return;
+      }
+    }
+    await LibraryScope.of(
+      context,
+    ).setReverseDrill(topic.id, enabled: enabled, now: DateTime.now().toUtc());
+    if (!mounted) return;
+    await _load();
+  }
+
   void _study(Topic topic) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -195,6 +226,17 @@ class _TopicScreenState extends State<TopicScreen> {
               ),
             ),
           ),
+          SliverToBoxAdapter(
+            child: SwitchListTile(
+              key: const Key('reverse-drill-switch'),
+              title: const Text('Reverse drill'),
+              subtitle: const Text(
+                'After a card is learned, also drill its back as the prompt.',
+              ),
+              value: topic.reverseDrill,
+              onChanged: _setReverseDrill,
+            ),
+          ),
           const SliverToBoxAdapter(child: _SectionHeader('Subtopics')),
           SliverList.builder(
             itemCount: children.length,
@@ -236,15 +278,19 @@ class _TopicScreenState extends State<TopicScreen> {
             itemBuilder: (context, index) {
               final card = cards[index];
               return ListTile(
+                visualDensity: VisualDensity.compact,
                 title: Text(
                   card.front,
-                  maxLines: 2,
+                  maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                subtitle: Text(
-                  card.back,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+                trailing: Text(
+                  cardProgressLabel(
+                    card: card,
+                    parameters: _parameters,
+                    now: DateTime.now().toUtc(),
+                  ),
+                  maxLines: 1,
                 ),
                 onTap: () => _openCard(card),
               );

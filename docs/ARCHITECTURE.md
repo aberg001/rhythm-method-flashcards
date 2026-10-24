@@ -76,11 +76,11 @@ test/
 
 ## Storage
 
-SQLite through Drift, schema version 1. One file, `rhythm_method.sqlite`, in application support.
+SQLite through Drift, schema version 2. One file, `rhythm_method.sqlite`, in application support. Opening a version 1 file adds the reverse columns and leaves existing rows without a reverse face.
 
-- Topics: id, parent, name, position, created time.
-- Cards: the scheduler fields above, plus topic, front, back, and created time.
-- Reviews: one row per grade, including the before and after schedule, so undo can restore it.
+- Topics: id, parent, name, position, created time, and the reverse-drill switch.
+- Cards: the forward schedule, plus a reverse face when its queue time is set.
+- Reviews: one row per grade, including the direction and the before and after schedule of that face, so undo can restore it.
 - Settings: one row of the five parameters.
 
 Generated database code is `lib/data/database.g.dart`. Drift stays on 2.31.0 so it matches this Flutter SDK. Regenerate that file only when the schema changes.
@@ -89,4 +89,4 @@ Generated database code is `lib/data/database.g.dart`. Drift stays on 2.31.0 so 
 
 Export writes topics, cards, and settings to `rhythm-method-backup.json` and hands it to the system share sheet. Review history is not in the file. Timestamps are UTC.
 
-Import parses the file before it touches the database. A file this app exported replaces the whole library. If the device already has a topic or a card, the user confirms first. Restoring clears review rows on the device. A file that does not parse leaves the library as it was. Version 1 is the only backup version the app reads and writes today.
+Import parses the file before it touches the database. A file this app exported replaces the whole library. If the device already has a topic or a card, the user confirms first. Restoring clears review rows on the device. A file that does not parse leaves the library as it was. Export writes version 2, including the reverse switch and each card's reverse face. Import still accepts version 1, which comes in with the switch off and no reverse faces.

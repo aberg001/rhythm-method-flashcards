@@ -123,4 +123,46 @@ void main() {
       expect(library.learnedDue, 1);
     },
   );
+
+  test('a waiting reverse counts as new, and two faces can both count', () {
+    final topics = [
+      const Topic(id: 'on', name: 'On', reverseDrill: true),
+      const Topic(id: 'off', name: 'Off'),
+    ];
+    final reversed = spawnReverseFace(
+      FlashCard(
+        id: 'both',
+        topicId: 'on',
+        front: 'front',
+        back: 'back',
+        learning: true,
+        lastReview: now,
+        intervalSeconds: 600,
+        difficulty: 1,
+        createdAt: DateTime.utc(2026, 1, 1),
+      ),
+      queuedAt: now,
+    );
+    final hidden = spawnReverseFace(
+      FlashCard.fresh(
+        id: 'hidden',
+        topicId: 'off',
+        front: 'front',
+        back: 'back',
+        createdAt: DateTime.utc(2026, 1, 2),
+      ),
+      queuedAt: now,
+    ).copyWith(reverseLearning: true, reverseLastReview: now);
+
+    final counts = countStudy(
+      topics: topics,
+      cards: [reversed, hidden],
+      scopeTopicId: null,
+      now: now,
+      parameters: parameters,
+    );
+    expect(counts.learning, 1);
+    expect(counts.newWaiting, 2);
+    expect(counts.learnedDue, 0);
+  });
 }
