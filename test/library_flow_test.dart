@@ -290,6 +290,32 @@ void main() {
       );
     });
 
+    testWidgets('leaving a study session refreshes the topic list', (
+      tester,
+    ) async {
+      await pumpApp(tester, repository);
+      await addRootTopic(tester, 'Spanish', fromEmpty: true);
+      await openTopic(tester, 'Spanish');
+      await addCard(tester, 'hola', 'hello');
+      expect(find.text('New'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Study'));
+      await settle(tester);
+      await tester.tap(find.byKey(const Key('flip-button')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await settle(tester);
+      await tester.tap(find.byKey(const Key('correct-button')));
+      await tester.pump();
+      await settle(tester);
+      await goBack(tester);
+
+      expect(appBarText('Spanish'), findsOneWidget);
+      expect(find.text('New'), findsNothing);
+      expect(find.text('Learning · 15m / 1h'), findsOneWidget);
+      expect(find.text('hello'), findsNothing);
+    });
+
     testWidgets(
       'reverse drill confirms for learned cards and does not pass to a subtopic',
       (tester) async {

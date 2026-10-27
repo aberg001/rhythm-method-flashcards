@@ -187,13 +187,15 @@ class _TopicScreenState extends State<TopicScreen> {
     await _load();
   }
 
-  void _study(Topic topic) {
-    Navigator.of(context).push(
+  Future<void> _study(Topic topic) async {
+    await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (context) =>
             StudySessionScreen(title: topic.name, scopeTopicId: topic.id),
       ),
     );
+    if (!mounted) return;
+    await _load();
   }
 
   @override
