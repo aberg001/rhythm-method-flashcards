@@ -130,6 +130,12 @@ class _StudySessionScreenState extends State<StudySessionScreen>
     final generation = ++_generation;
     final repository = LibraryScope.of(context);
     final topics = await repository.listTopics();
+    final inScope = topicIdsInScope(topics, widget.scopeTopicId);
+    for (final topic in topics) {
+      if (!topic.reverseDrill || !inScope.contains(topic.id)) continue;
+      await repository.ensureReverseFaces(topic.id, now: _clock());
+      if (!mounted || generation != _generation) return;
+    }
     final cards = await repository.listCards();
     if (!mounted || generation != _generation) return;
     setState(() {

@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:drift/drift.dart' hide isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 // sqlite3 is already locked through Drift. The migration test writes a
@@ -218,6 +219,11 @@ void main() {
         ),
       );
 
+      final before = await repository.card('hola');
+      expect(before.hasReverse, isTrue);
+      expect(before.reverseLearning, isFalse);
+      expect(before.reverseLastReview, isNull);
+
       final graded = await repository.grade(
         cardId: 'hola',
         outcome: GradeOutcome.correct,
@@ -231,16 +237,21 @@ void main() {
       expect(card.reverseLastReview, isNull);
       expect(card.reverseIntervalSeconds, 600);
       expect(card.reverseDifficulty, 1);
-      expect(card.reverseQueuedAt!.isAfter(now), isTrue);
+      expect(card.reverseQueuedAt!.isAfter(before.reverseQueuedAt!), isTrue);
       expect(
         (await repository.reviewsFor('hola')).single.record.face,
         StudyFace.forward,
       );
 
       final restored = await repository.undo(graded);
-      expect(restored.hasReverse, isFalse);
+      expect(restored.hasReverse, isTrue);
       expect(restored.learning, isTrue);
-      expect((await repository.card('hola')).hasReverse, isFalse);
+      expect(restored.reverseQueuedAt, before.reverseQueuedAt);
+      expect(restored.reverseIntervalSeconds, 600);
+      expect(
+        (await repository.card('hola')).reverseQueuedAt,
+        before.reverseQueuedAt,
+      );
     },
   );
 
@@ -311,7 +322,10 @@ void main() {
       expect(older.reverseQueuedAt!.isAfter(newer.reverseQueuedAt!), isTrue);
       expect(older.reverseDifficulty, 1);
       expect(newer.reverseDifficulty, 1);
-      expect(fresh.hasReverse, isFalse);
+      expect(fresh.hasReverse, isTrue);
+      expect(fresh.reverseLearning, isFalse);
+      expect(fresh.reverseLastReview, isNull);
+      expect(fresh.reverseQueuedAt!.isBefore(newer.reverseQueuedAt!), isTrue);
       expect(child.hasReverse, isFalse);
       expect(
         (await repository.listTopics())
@@ -336,6 +350,62 @@ void main() {
       );
       final resumed = await repository.card('older');
       expect(resumed.reverseQueuedAt, older.reverseQueuedAt);
+    },
+  );
+
+  test(
+    'a topic already switched on gains the reverses it was missing',
+    () async {
+      final now = DateTime.utc(2026, 6, 1, 12);
+      await repository.insertTopic(id: 'spanish', name: 'Spanish');
+      await repository.insertCard(
+        FlashCard.fresh(
+          id: 'fresh',
+          topicId: 'spanish',
+          front: 'fresh',
+          back: 'fresh-back',
+          createdAt: DateTime.utc(2026, 1, 2),
+        ),
+      );
+      await repository.insertCard(
+        FlashCard(
+          id: 'known',
+          topicId: 'spanish',
+          front: 'known',
+          back: 'known-back',
+          learning: false,
+          lastReview: DateTime.utc(2024, 1, 1),
+          intervalSeconds: 7200,
+          difficulty: 2,
+          createdAt: DateTime.utc(2024, 1, 1),
+        ),
+      );
+      await (database.update(database.topics)
+            ..where((row) => row.id.equals('spanish')))
+          .write(const TopicsCompanion(reverseDrill: Value(true)));
+      expect((await repository.card('fresh')).hasReverse, isFalse);
+
+      await repository.ensureReverseFaces('spanish', now: now);
+      final fresh = await repository.card('fresh');
+      final known = await repository.card('known');
+      expect(fresh.hasReverse, isTrue);
+      expect(fresh.reverseLastReview, isNull);
+      expect(known.hasReverse, isTrue);
+      expect(known.reverseDifficulty, 1);
+      expect(known.reverseQueuedAt!.isAfter(fresh.reverseQueuedAt!), isTrue);
+
+      await repository.ensureReverseFaces(
+        'spanish',
+        now: now.add(const Duration(days: 1)),
+      );
+      expect(
+        (await repository.card('known')).reverseQueuedAt,
+        known.reverseQueuedAt,
+      );
+      expect(
+        (await repository.card('fresh')).reverseQueuedAt,
+        fresh.reverseQueuedAt,
+      );
     },
   );
 

@@ -159,7 +159,23 @@ class LibraryRepository {
 
   Future<void> insertCard(FlashCard card) {
     return _db.transaction(() async {
-      await _db.into(_db.cards).insert(_cardCompanion(card));
+      var stored = card;
+      if (!stored.hasReverse) {
+        final topic = await (_db.select(
+          _db.topics,
+        )..where((row) => row.id.equals(card.topicId))).getSingleOrNull();
+        if (topic != null && topic.reverseDrill) {
+          final parameters = await loadSettings();
+          final existing = (await _db.select(_db.cards).get()).map(_card);
+          stored = _spawnMissingReverse(
+            stored,
+            existing: existing,
+            parameters: parameters,
+            now: DateTime.now().toUtc(),
+          );
+        }
+      }
+      await _db.into(_db.cards).insert(_cardCompanion(stored));
     });
   }
 
@@ -332,10 +348,10 @@ class LibraryRepository {
 
   /// Turns the reverse drill on or off for this topic only.
   ///
-  /// Turning it on gives a reverse face to every learned card in the topic
-  /// that does not have one yet. Cards known longest are queued ahead of
-  /// cards learned more recently, and behind reverses that are already
-  /// waiting. Turning it off leaves the stored faces in place.
+  /// Turning it on gives a reverse face to every card in the topic that
+  /// does not have one yet. Learned cards are queued ahead of cards not yet
+  /// started. The other new reverses stay dormant until their own front is
+  /// learned. Turning it off leaves the stored faces in place.
   Future<void> setReverseDrill(
     String topicId, {
     required bool enabled,
@@ -351,26 +367,54 @@ class LibraryRepository {
       await (_db.update(_db.topics)..where((row) => row.id.equals(topicId)))
           .write(TopicsCompanion(reverseDrill: Value(enabled)));
       if (!enabled) return;
-
-      final parameters = await loadSettings();
-      final rows = await _db.select(_db.cards).get();
-      final cards = rows.map(_card).toList();
-      final ceiling = reverseBackfillCeiling(
-        cards.map((card) => card.reverseQueuedAt),
-        now,
-      );
-      final needing = [
-        for (final card in cards)
-          if (card.topicId == topicId &&
-              !card.hasReverse &&
-              cardIsLearned(card, parameters))
-            card,
-      ];
-      final queued = queueReverseBackfill(needing, ceiling: ceiling);
-      for (final card in queued) {
-        await _writeCard(card);
-      }
+      await _attachMissingReverses(topicId, now);
     });
+  }
+
+  /// Gives a reverse face to any card in [topicId] that lacks one.
+  ///
+  /// Does nothing when the topic is missing or the switch is off. Opening a
+  /// topic or starting study calls this so a topic turned on by an older
+  /// build, which only filled learned cards, gains the missing faces.
+  Future<void> ensureReverseFaces(String topicId, {required DateTime now}) {
+    return _db.transaction(() async {
+      final topic = await (_db.select(
+        _db.topics,
+      )..where((row) => row.id.equals(topicId))).getSingleOrNull();
+      if (topic == null || !topic.reverseDrill) return;
+      await _attachMissingReverses(topicId, now);
+    });
+  }
+
+  Future<void> _attachMissingReverses(String topicId, DateTime now) async {
+    final parameters = await loadSettings();
+    final cards = (await _db.select(_db.cards).get()).map(_card).toList();
+    final ceiling = reverseBackfillCeiling(
+      cards.map((card) => card.reverseQueuedAt),
+      now,
+    );
+    final missing = [
+      for (final card in cards)
+        if (card.topicId == topicId && !card.hasReverse) card,
+    ];
+    final learned = [
+      for (final card in missing)
+        if (cardIsLearned(card, parameters)) card,
+    ];
+    final dormant = [
+      for (final card in missing)
+        if (!cardIsLearned(card, parameters)) card,
+    ];
+    final learnedQueued = queueReverseBackfill(learned, ceiling: ceiling);
+    final earliest = learnedQueued.isEmpty
+        ? ceiling
+        : learnedQueued
+              .map((card) => card.reverseQueuedAt!)
+              .reduce((a, b) => a.isBefore(b) ? a : b);
+    final dormantQueued = queueDormantReverses(dormant, behind: earliest);
+    for (final card in [...learnedQueued, ...dormantQueued]) {
+      await _writeCard(card);
+    }
   }
 
   /// Grades the stored card and appends its review row.
@@ -400,15 +444,17 @@ class LibraryRepository {
         final topic = await (_db.select(
           _db.topics,
         )..where((row) => row.id.equals(card.topicId))).getSingle();
-        if (topic.reverseDrill && !after.hasReverse) {
+        if (topic.reverseDrill) {
           final queued = await _db.select(_db.cards).get();
-          after = spawnReverseFace(
-            after,
-            queuedAt: nextReverseQueuedAt(
-              queued.map((row) => row.reverseQueuedAt),
-              now,
-            ),
+          final queuedAt = nextReverseQueuedAt(
+            queued.map((row) => row.reverseQueuedAt),
+            now,
           );
+          if (!after.hasReverse) {
+            after = spawnReverseFace(after, queuedAt: queuedAt);
+          } else if (reverseFaceIsNew(after)) {
+            after = promoteReverseFace(after, queuedAt: queuedAt);
+          }
         }
       }
       final result = GradeResult(
@@ -478,6 +524,22 @@ class LibraryRepository {
   Future<void> _writeCard(FlashCard card) {
     return _db.update(_db.cards).replace(_cardRow(card));
   }
+}
+
+FlashCard _spawnMissingReverse(
+  FlashCard card, {
+  required Iterable<FlashCard> existing,
+  required SchedulerParameters parameters,
+  required DateTime now,
+}) {
+  final ceiling = reverseBackfillCeiling(
+    existing.map((row) => row.reverseQueuedAt),
+    now,
+  );
+  if (cardIsLearned(card, parameters)) {
+    return queueReverseBackfill([card], ceiling: ceiling).single;
+  }
+  return queueDormantReverses([card], behind: ceiling).single;
 }
 
 Topic _topic(TopicRow row) {

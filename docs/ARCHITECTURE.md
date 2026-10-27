@@ -79,7 +79,7 @@ test/
 SQLite through Drift, schema version 2. One file, `rhythm_method.sqlite`, in application support. Opening a version 1 file adds the reverse columns and leaves existing rows without a reverse face.
 
 - Topics: id, parent, name, position, created time, and the reverse-drill switch.
-- Cards: the forward schedule, plus a reverse face when its queue time is set.
+- Cards: the forward schedule, plus a reverse face when its queue time is set. While a topic's reverse drill is on, every card in that topic has a face. A reverse whose front is not yet learned is stored and is not selected.
 - Reviews: one row per grade, including the direction and the before and after schedule of that face, so undo can restore it.
 - Settings: one row of the five parameters.
 

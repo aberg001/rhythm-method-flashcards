@@ -23,19 +23,39 @@ String formatStudyInterval(Duration duration) {
   return '${days}d';
 }
 
-/// New, learning, or learned, for one row in the topic list.
+/// New, learning, or learned, for the forward face in the topic list.
 ///
-/// The interval is the graduation meter while the card is not learned, and
-/// the wait afterward. Due is separate, and only learned cards get it.
+/// The interval is the graduation meter while the face is not learned, and
+/// the wait afterward. Due is separate, and only learned faces get it.
 /// Difficulty is left out: it only rises, so it is not a mastery score.
 String cardProgressLabel({
   required FlashCard card,
   required SchedulerParameters parameters,
   required DateTime now,
 }) {
-  if (card.isNew) return 'New';
-  final interval = Duration(seconds: card.intervalSeconds);
-  if (!cardIsLearned(card, parameters)) {
+  return faceProgressLabel(
+    card: card,
+    face: StudyFace.forward,
+    parameters: parameters,
+    now: now,
+  );
+}
+
+/// The same label as [cardProgressLabel], for one face.
+///
+/// A reverse that has not been created yet reads as New.
+String faceProgressLabel({
+  required FlashCard card,
+  required StudyFace face,
+  required SchedulerParameters parameters,
+  required DateTime now,
+}) {
+  if (face == StudyFace.reverse && !card.hasReverse) return 'New';
+  final learning = scheduledLearning(card, face);
+  final reviewed = scheduledLastReview(card, face);
+  if (!learning && reviewed == null) return 'New';
+  final interval = Duration(seconds: scheduledInterval(card, face));
+  if (!faceIsLearned(card, face, parameters)) {
     final shown = formatStudyInterval(interval);
     if (interval > parameters.learnedThreshold) {
       return 'Learning · $shown';
@@ -44,6 +64,6 @@ String cardProgressLabel({
     return 'Learning · $shown / $threshold';
   }
   final label = 'Learned · ${formatStudyInterval(interval)}';
-  if (cardIsDue(card, now)) return '$label · Due';
+  if (faceIsDue(card, face, now)) return '$label · Due';
   return label;
 }

@@ -161,24 +161,24 @@ The window is counted inside the current scope, not across the whole library. Se
 
 ## Reverse faces
 
-A topic may drill a card back to front after the forward face is learned. The switch is stored on that topic. It is off until the user turns it on, and it does not pass to subtopics. A card follows the switch on its own topic, including when the session scope is a parent topic or the whole library.
+A topic may drill every card back to front. The switch is stored on that topic. It is off until the user turns it on, and it does not pass to subtopics. A card follows the switch on its own topic, including when the session scope is a parent topic or the whole library.
 
 The reverse face has its own `learning`, `last_review`, `interval`, and `difficulty`. A null queue timestamp means the face does not exist. Creating one sets `learning` false, `last_review` null, `interval` to `I_0`, and `difficulty` to 1.0. It does not copy the forward face. A grade on one face does not change the other.
 
-The face is created only when the switch is on and the card does not have one yet:
+While the switch is on, every card in that topic has a reverse face. Turning the switch on creates one for each card that lacks one, including cards that are still new or learning. A card added while the switch is on gets one in the same write. A topic that was turned on before this rule is repaired the next time it is opened or studied.
 
-- The forward face just graduated. This correct answer cleared `learning` because the interval is now strictly above `T`.
-- The user turns the switch on, and the forward face is already learned. Every such card in that topic gains a face. Cards known longest, measured by the oldest forward `last_review`, are placed ahead of cards learned more recently.
+A reverse is **dormant** while it is new and its own forward face is not learned. It is stored and shown as new. It is not a candidate, it does not count as a new card waiting, and it does not take a learning seat. A reverse is **waiting** when it is new and its own forward face is learned. Only waiting reverses join the new-face line.
 
-Turning the switch off stops creating faces and stops selecting them. They leave the window count. Their stored state remains. Turning the switch on again resumes them, and backfills learned cards that still have no face.
+Turning the switch off stops creating faces and stops selecting them. They leave the window count. Their stored state remains. Turning the switch on again resumes them, including a reverse that was already learning, and fills in cards that still have no face.
 
 Queue order among waiting reverses puts the newest graduation at the front. Timestamps are whole UTC seconds, because that is the resolution SQLite stores:
 
-- A face created by a graduation is strictly after every queue time already stored, so it is the head of the line.
-- A backfill sits behind reverses that were already queued. Inside the backfill, the longest-known card is ahead.
-- A later graduation still cuts in front of that backfill. A run of graduations keeps putting the newest reverse at the front. Ordinary new cards wait behind every waiting reverse.
+- When the forward face just graduated, its reverse moves to a time strictly after every queue time already stored, so that back is the head of the line. The reverse schedule is not reset. Graduation is the correct answer that cleared forward `learning` because the interval is now strictly above `T`.
+- Already-learned cards filled in when the switch turns on sit behind reverses that were already queued. Inside that fill, the longest-known card, measured by the oldest forward `last_review`, is ahead.
+- A later graduation still cuts in front of that fill. Ordinary new cards wait behind every waiting reverse. They do not wait behind a dormant reverse.
+- When a waiting reverse graduates, the next new face is the next waiting reverse, if one remains, otherwise the oldest never-started forward card.
 
-Selection is the same three steps, applied to faces that are in play. The forward face is always in play. The reverse face is in play only when the card's own topic has the switch on and the queue timestamp is set.
+Selection is the same three steps, applied to faces that are in play. The forward face is always in play. The reverse face is in play when the card's own topic has the switch on, the queue timestamp is set, and the face is not dormant.
 
 1. Due learned faces, ordered as due learned cards are ordered. When the ratio, the lateness, `created_at`, and `id` all tie, the forward face comes first.
 2. `L` is the number of in-play learning faces. One card can hold two seats. The new face that may join the draw is the waiting reverse at the head of the queue, or, when none is waiting, the oldest never-started card. The weights do not change.
@@ -186,9 +186,9 @@ Selection is the same three steps, applied to faces that are in play. The forwar
 
 A full window admits nobody, including a waiting reverse. A waiting reverse does not skip the window and does not outrank a due learned face. While `L` is 0 or 1 and a new face is waiting, the next draw admits that face.
 
-In study, a reverse prompt is the card's back and the answer is the card's front. The border still means prompt versus answer. The card shows a Reverse label. Flip works the same way. The review row records the direction. Undo writes the pre-grade snapshot of the whole card back and shows the graded face on the answer side. Undo of the graduation that created a reverse removes that face, because the snapshot was taken before it existed. Undo does not un-admit.
+In study, a reverse prompt is the card's back and the answer is the card's front. The border still means prompt versus answer. The card shows a Reverse label. Flip works the same way. The review row records the direction. Undo writes the pre-grade snapshot of the whole card back and shows the graded face on the answer side. Undo of a graduation restores the reverse queue time from that snapshot, so a face that already existed is not deleted. Undo does not un-admit.
 
-Status numbers count in-play faces. A waiting reverse counts as a new card. The sentence stays in the form in the next section. One card can contribute to two of those counts.
+The topic list shows Forward and Reverse columns while the switch is on, and only the forward label while it is off. Status numbers count in-play faces. A waiting reverse counts as a new card. A dormant reverse does not. The sentence stays in the form in the next section. One card can contribute to two of those counts.
 
 ## What the interval means
 
@@ -224,8 +224,8 @@ Each of these is a unit test with a fake clock and a scripted draw. Where a prob
 14. Undo restores interval, difficulty, `learning`, and `last_review` to the pre-grade snapshot.
 15. Admitting a card sets `learning` true before the grade. A second select does not admit it again.
 16. A grade on one face does not change the other face's interval, difficulty, learning flag, or last review. A new reverse face starts at `I_0` and difficulty 1.0.
-17. Among new faces, every waiting reverse comes before every never-started card. A graduation's reverse is the head of that line. A backfill is behind reverses already queued, and within the backfill the oldest forward `last_review` is ahead. A later graduation cuts in front of the backfill.
-18. With the switch off, reverse faces are not selected and do not count toward the window. A due learned face outranks a waiting reverse. A full window admits no reverse. Two learning faces on one card occupy two seats. A card uses the switch on its own topic.
+17. Among new faces, a reverse is waiting only when its own front is learned. Every waiting reverse comes before every never-started card. A reverse whose front is still new or learning is not selected and does not count as waiting. A graduation moves that card's reverse to the head of the waiting line. A backfill of already-learned cards is behind reverses already queued, and within the backfill the oldest forward `last_review` is ahead.
+18. With the switch off, reverse faces are not selected and do not count toward the window. A due learned face outranks a waiting reverse. A full window admits no reverse. Two learning faces on one card occupy two seats. A dormant reverse does not occupy a seat. A card uses the switch on its own topic.
 
 ## Decisions
 

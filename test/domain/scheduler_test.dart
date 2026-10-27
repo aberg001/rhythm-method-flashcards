@@ -1105,6 +1105,117 @@ void main() {
       expect(inChild.face, StudyFace.forward);
     });
 
+    test('a reverse whose front is still learning is not a candidate', () {
+      final dormant = spawnReverseFace(
+        freshCard(
+          id: 'drilling',
+        ).copyWith(learning: true, lastReview: now, intervalSeconds: 1800),
+        queuedAt: DateTime.utc(2026, 8, 1),
+      );
+      final fresh = freshCard(id: 'plain', createdAt: DateTime.utc(2020, 1, 1));
+      final selected =
+          selectCard(
+                topics: [topic(reverse: true)],
+                cards: [dormant, fresh],
+                scopeTopicId: null,
+                now: now,
+                parameters: parameters,
+                draw: (total) {
+                  expect(total, 1);
+                  return 0;
+                },
+              )
+              as CardSelected;
+      expect(selected.card.id, 'plain');
+      expect(selected.face, StudyFace.forward);
+      expect(selected.admitted, isTrue);
+      expect(dormant.reverseLearning, isFalse);
+    });
+
+    test('graduating the front puts that reverse ahead of an older one', () {
+      final older = spawnReverseFace(
+        learnedCard(
+          id: 'older',
+          interval: const Duration(days: 2),
+          lastReview: now,
+        ),
+        queuedAt: DateTime.utc(2026, 4, 1),
+      );
+      final drilling = spawnReverseFace(
+        freshCard(id: 'drilling').copyWith(
+          learning: true,
+          lastReview: now.subtract(const Duration(minutes: 40)),
+          intervalSeconds: 4000,
+        ),
+        queuedAt: DateTime.utc(2026, 1, 1),
+      );
+      final graded = gradeCard(
+        card: drilling,
+        outcome: GradeOutcome.correct,
+        now: now,
+        parameters: parameters,
+      );
+      expect(
+        forwardJustGraduated(
+          before: graded.before,
+          after: graded.after,
+          parameters: parameters,
+        ),
+        isTrue,
+      );
+      final promoted = promoteReverseFace(
+        graded.after,
+        queuedAt: nextReverseQueuedAt([
+          older.reverseQueuedAt,
+          drilling.reverseQueuedAt,
+        ], now),
+      );
+      expect(promoted.reverseIntervalSeconds, 600);
+      expect(promoted.reverseDifficulty, 1);
+      expect(promoted.reverseQueuedAt!.isAfter(older.reverseQueuedAt!), isTrue);
+
+      final fresh = freshCard(id: 'plain');
+      final next =
+          selectCard(
+                topics: [topic(reverse: true)],
+                cards: [older, promoted, fresh],
+                scopeTopicId: null,
+                now: now,
+                parameters: parameters,
+                draw: (_) => fail('an empty window does not draw'),
+              )
+              as CardSelected;
+      expect(next.card.id, 'drilling');
+      expect(next.face, StudyFace.reverse);
+
+      final reverseLearned = promoted.copyWith(
+        reverseLearning: false,
+        reverseLastReview: now,
+        reverseIntervalSeconds: const Duration(hours: 2).inSeconds,
+      );
+      final otherDormant = spawnReverseFace(
+        freshCard(
+          id: 'still',
+        ).copyWith(learning: true, lastReview: now, intervalSeconds: 600),
+        queuedAt: DateTime.utc(2026, 9, 1),
+      );
+      final afterReverse =
+          selectCard(
+                topics: [topic(reverse: true)],
+                cards: [reverseLearned, fresh, otherDormant],
+                scopeTopicId: null,
+                now: now,
+                parameters: parameters,
+                draw: (total) {
+                  expect(total, 1);
+                  return 0;
+                },
+              )
+              as CardSelected;
+      expect(afterReverse.card.id, 'plain');
+      expect(afterReverse.face, StudyFace.forward);
+    });
+
     test('forward graduation is the correct answer that clears learning', () {
       final learning = freshCard().copyWith(
         learning: true,

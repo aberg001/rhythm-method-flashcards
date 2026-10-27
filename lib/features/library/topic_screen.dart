@@ -38,8 +38,17 @@ class _TopicScreenState extends State<TopicScreen> {
     final generation = ++_generation;
     final repository = LibraryScope.of(context);
     final topics = await repository.listTopics();
-    final cards = await repository.listCards();
+    var cards = await repository.listCards();
     final parameters = await repository.loadSettings();
+    final topic = topics.where((item) => item.id == widget.topicId).firstOrNull;
+    if (topic != null && topic.reverseDrill) {
+      await repository.ensureReverseFaces(
+        topic.id,
+        now: DateTime.now().toUtc(),
+      );
+      if (!mounted || generation != _generation) return;
+      cards = await repository.listCards();
+    }
     if (!mounted || generation != _generation) return;
     setState(() {
       _topics = topics;
@@ -231,7 +240,7 @@ class _TopicScreenState extends State<TopicScreen> {
               key: const Key('reverse-drill-switch'),
               title: const Text('Reverse drill'),
               subtitle: const Text(
-                'After a card is learned, also drill its back as the prompt.',
+                'Every card also has a back-to-front drill. It waits until the front is learned, then comes before cards not yet started.',
               ),
               value: topic.reverseDrill,
               onChanged: _setReverseDrill,
@@ -266,6 +275,8 @@ class _TopicScreenState extends State<TopicScreen> {
             ),
           ),
           const SliverToBoxAdapter(child: _SectionHeader('Cards')),
+          if (topic.reverseDrill && cards.isNotEmpty)
+            const SliverToBoxAdapter(child: _FaceColumnHeader()),
           if (cards.isEmpty)
             const SliverToBoxAdapter(
               child: Padding(
@@ -277,20 +288,44 @@ class _TopicScreenState extends State<TopicScreen> {
             itemCount: cards.length,
             itemBuilder: (context, index) {
               final card = cards[index];
+              final now = DateTime.now().toUtc();
+              if (!topic.reverseDrill) {
+                return ListTile(
+                  visualDensity: VisualDensity.compact,
+                  title: Text(
+                    card.front,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  trailing: Text(
+                    cardProgressLabel(
+                      card: card,
+                      parameters: _parameters,
+                      now: now,
+                    ),
+                    maxLines: 1,
+                  ),
+                  onTap: () => _openCard(card),
+                );
+              }
               return ListTile(
                 visualDensity: VisualDensity.compact,
-                title: Text(
-                  card.front,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                trailing: Text(
-                  cardProgressLabel(
+                title: _FaceColumns(
+                  front: card.front,
+                  forward: faceProgressLabel(
                     card: card,
+                    face: StudyFace.forward,
                     parameters: _parameters,
-                    now: DateTime.now().toUtc(),
+                    now: now,
                   ),
-                  maxLines: 1,
+                  reverse: faceProgressLabel(
+                    card: card,
+                    face: StudyFace.reverse,
+                    parameters: _parameters,
+                    now: now,
+                  ),
+                  forwardKey: Key('forward-progress-${card.id}'),
+                  reverseKey: Key('reverse-progress-${card.id}'),
                 ),
                 onTap: () => _openCard(card),
               );
@@ -309,6 +344,92 @@ class _TopicScreenState extends State<TopicScreen> {
           SliverPadding(padding: EdgeInsets.only(bottom: bottom + 16)),
         ],
       ),
+    );
+  }
+}
+
+const _statusColumnWidth = 128.0;
+
+class _FaceColumnHeader extends StatelessWidget {
+  const _FaceColumnHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme.labelLarge;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+      child: Row(
+        children: [
+          const Spacer(),
+          SizedBox(
+            width: _statusColumnWidth,
+            child: Text(
+              'Forward',
+              key: const Key('forward-column'),
+              textAlign: TextAlign.end,
+              style: style,
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: _statusColumnWidth,
+            child: Text(
+              'Reverse',
+              key: const Key('reverse-column'),
+              textAlign: TextAlign.end,
+              style: style,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FaceColumns extends StatelessWidget {
+  const _FaceColumns({
+    required this.front,
+    required this.forward,
+    required this.reverse,
+    required this.forwardKey,
+    required this.reverseKey,
+  });
+
+  final String front;
+  final String forward;
+  final String reverse;
+  final Key forwardKey;
+  final Key reverseKey;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme.bodyMedium;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Text(front, maxLines: 1, overflow: TextOverflow.ellipsis),
+        ),
+        SizedBox(
+          width: _statusColumnWidth,
+          child: Text(
+            forward,
+            key: forwardKey,
+            textAlign: TextAlign.end,
+            style: style,
+          ),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: _statusColumnWidth,
+          child: Text(
+            reverse,
+            key: reverseKey,
+            textAlign: TextAlign.end,
+            style: style,
+          ),
+        ),
+      ],
     );
   }
 }

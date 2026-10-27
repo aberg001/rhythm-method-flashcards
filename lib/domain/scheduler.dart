@@ -466,13 +466,61 @@ List<FlashCard> queueReverseBackfill(
       if (byReview != 0) return byReview;
       return a.id.compareTo(b.id);
     });
+  return _queueBehind(ordered, behind: ceiling);
+}
+
+/// Gives each not-yet-learned card a reverse face behind [behind].
+///
+/// These faces are stored and shown as new. They are not waiting, because
+/// the forward face is not learned yet. A later graduation moves one of
+/// them to the head with [nextReverseQueuedAt].
+List<FlashCard> queueDormantReverses(
+  List<FlashCard> withoutReverse, {
+  required DateTime behind,
+}) {
+  final ordered = [...withoutReverse]
+    ..sort((a, b) {
+      final byCreated = a.createdAt.compareTo(b.createdAt);
+      if (byCreated != 0) return byCreated;
+      return a.id.compareTo(b.id);
+    });
+  return _queueBehind(ordered, behind: behind);
+}
+
+List<FlashCard> _queueBehind(
+  List<FlashCard> ordered, {
+  required DateTime behind,
+}) {
   final queued = <FlashCard>[];
-  var cursor = _wholeUtcSecond(ceiling);
+  var cursor = _wholeUtcSecond(behind);
   for (final card in ordered) {
     cursor = cursor.subtract(const Duration(seconds: 1));
     queued.add(spawnReverseFace(card, queuedAt: cursor));
   }
   return queued;
+}
+
+/// True when the reverse face exists and has never been admitted or graded.
+bool reverseFaceIsNew(FlashCard card) {
+  return card.hasReverse &&
+      !card.reverseLearning &&
+      card.reverseLastReview == null;
+}
+
+/// A new reverse whose own front is learned. It may enter the window.
+bool reverseIsWaiting(FlashCard card, SchedulerParameters parameters) {
+  return reverseFaceIsNew(card) && cardIsLearned(card, parameters);
+}
+
+/// Moves an existing new reverse to [queuedAt] without changing its schedule.
+///
+/// Graduation uses this so the matching back becomes the head of the line.
+/// Throws when the card has no new reverse face.
+FlashCard promoteReverseFace(FlashCard card, {required DateTime queuedAt}) {
+  if (!reverseFaceIsNew(card)) {
+    throw StateError('Card ${card.id} has no new reverse face');
+  }
+  return card.copyWith(reverseQueuedAt: queuedAt);
 }
 
 bool scheduledLearning(FlashCard card, StudyFace face) {
@@ -495,10 +543,20 @@ double scheduledDifficulty(FlashCard card, StudyFace face) {
 
 /// Faces that take a window seat or can be selected.
 ///
-/// The reverse face is included only when the card's own topic has the
-/// switch on and the face exists.
-List<StudyFace> facesInPlay(FlashCard card, {required bool reverseDrill}) {
-  if (reverseDrill && card.hasReverse) {
+/// The reverse face is included when the card's own topic has the switch
+/// on, the face exists, and it is not dormant. A dormant reverse is new
+/// while its own front is still new or learning: it is stored and shown,
+/// and it is not a candidate.
+List<StudyFace> facesInPlay(
+  FlashCard card, {
+  required bool reverseDrill,
+  required SchedulerParameters parameters,
+}) {
+  if (!reverseDrill || !card.hasReverse) {
+    return const [StudyFace.forward];
+  }
+  final started = !reverseFaceIsNew(card);
+  if (started || reverseIsWaiting(card, parameters)) {
     return const [StudyFace.forward, StudyFace.reverse];
   }
   return const [StudyFace.forward];
@@ -596,7 +654,7 @@ Selection selectCard({
   final faces = <_Face>[
     for (final card in cards)
       if (scope.contains(card.topicId))
-        ..._facesOf(card, topicById[card.topicId]),
+        ..._facesOf(card, topicById[card.topicId], parameters),
   ];
 
   final dueLearned = [
@@ -612,7 +670,7 @@ Selection selectCard({
     for (final face in faces)
       if (face.learning) face,
   ]..sort(_compareLearningFaces);
-  final nextNew = _nextNewFace(faces);
+  final nextNew = _nextNewFace(faces, parameters);
 
   final learningCount = learning.length;
   final includeNew =
@@ -697,11 +755,16 @@ final class _Face {
   }
 }
 
-List<_Face> _facesOf(FlashCard card, Topic? topic) {
+List<_Face> _facesOf(
+  FlashCard card,
+  Topic? topic,
+  SchedulerParameters parameters,
+) {
   return [
     for (final direction in facesInPlay(
       card,
       reverseDrill: topic?.reverseDrill ?? false,
+      parameters: parameters,
     ))
       _Face(card, direction),
   ];
@@ -715,10 +778,16 @@ FlashCard _admit(_Face face) {
 
 /// The one new face that may join the draw: the head waiting reverse, or
 /// the oldest never-started card when no reverse is waiting.
-_Face? _nextNewFace(List<_Face> faces) {
+///
+/// A reverse is waiting only when its own front is learned. A new reverse
+/// on a card that is still new or learning is left out.
+_Face? _nextNewFace(List<_Face> faces, SchedulerParameters parameters) {
   final reverses = [
     for (final face in faces)
-      if (face.direction == StudyFace.reverse && face.isNew) face,
+      if (face.direction == StudyFace.reverse &&
+          face.isNew &&
+          cardIsLearned(face.card, parameters))
+        face,
   ]..sort(_compareWaitingReverses);
   if (reverses.isNotEmpty) return reverses.first;
   final fresh = [

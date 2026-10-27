@@ -12,9 +12,9 @@ The local plain-text app is in place:
 - Grades, admissions, and undo stored in SQLite as they happen.
 - JSON export of topics, cards, and settings, and import that replaces the library.
 - An iPhone pass for safe areas, Dynamic Type, VoiceOver, and a haptic tick after a successful grade.
-- A compact topic list. Each card is one line of the front, with New, Learning, or Learned, the interval, and Due when a learned card is due.
+- A compact topic list. Each card is one line of the front, with New, Learning, or Learned, the interval, and Due when a learned card is due. With the reverse drill on, the row has Forward and Reverse columns.
 - The study card turns on its Y axis. Flip can be used again before grading. Wrong and Correct wait until the answer has been seen, then stay available on the prompt. A swipe grades only on the answer side.
-- A per-topic reverse drill. The reverse face keeps its own schedule, starts at 10 minutes and difficulty 1.0, and waits ahead of cards not yet started. Schema version 2 and backup version 2. Backup version 1 still imports.
+- A per-topic reverse drill. Every card in that topic has a reverse face with its own schedule, starting at 10 minutes and difficulty 1.0. The reverse stays new until its own front is learned, then waits ahead of cards not yet started. Schema version 2 and backup version 2. Backup version 1 still imports.
 
 ## Next
 

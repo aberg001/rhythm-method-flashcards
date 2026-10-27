@@ -349,6 +349,112 @@ void main() {
         expect((await repository.card('known')).topicId, 'parent');
       },
     );
+
+    testWidgets(
+      'reverse columns show both faces and a new card starts new on both',
+      (tester) async {
+        final reviewed = DateTime.now().toUtc();
+        await repository.insertTopic(id: 'parent', name: 'Parent');
+        await repository.insertCard(
+          FlashCard(
+            id: 'known',
+            topicId: 'parent',
+            front: 'hola',
+            back: 'hello',
+            learning: false,
+            lastReview: reviewed,
+            intervalSeconds: 7200,
+            difficulty: 1,
+            createdAt: DateTime.utc(2024, 1, 1),
+          ),
+        );
+        await repository.insertCard(
+          FlashCard.fresh(
+            id: 'fresh',
+            topicId: 'parent',
+            front: 'adios',
+            back: 'goodbye',
+            createdAt: DateTime.utc(2026, 1, 1),
+          ),
+        );
+        await pumpApp(tester, repository);
+        await openTopic(tester, 'Parent');
+
+        expect(find.byKey(const Key('forward-column')), findsNothing);
+        expect(find.byKey(const Key('reverse-column')), findsNothing);
+        expect(find.text('Learned · 2h'), findsOneWidget);
+        expect(find.text('New'), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('reverse-drill-switch')));
+        await elapse(tester);
+        await tester.tap(find.text('Turn on'));
+        await settle(tester);
+
+        expect(find.byKey(const Key('forward-column')), findsOneWidget);
+        expect(find.byKey(const Key('reverse-column')), findsOneWidget);
+        expect(
+          tester
+              .widget<Text>(find.byKey(const Key('forward-progress-known')))
+              .data,
+          'Learned · 2h',
+        );
+        expect(
+          tester
+              .widget<Text>(find.byKey(const Key('reverse-progress-known')))
+              .data,
+          'New',
+        );
+        expect(
+          tester
+              .widget<Text>(find.byKey(const Key('forward-progress-fresh')))
+              .data,
+          'New',
+        );
+        expect(
+          tester
+              .widget<Text>(find.byKey(const Key('reverse-progress-fresh')))
+              .data,
+          'New',
+        );
+
+        await tester.tap(find.byKey(const Key('reverse-drill-switch')));
+        await settle(tester);
+        expect(find.byKey(const Key('forward-column')), findsNothing);
+        expect((await repository.card('known')).hasReverse, isTrue);
+        expect(find.text('Learned · 2h'), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('reverse-drill-switch')));
+        await settle(tester);
+        expect(find.text('Turn on'), findsNothing);
+        expect(find.byKey(const Key('reverse-column')), findsOneWidget);
+        expect(
+          tester
+              .widget<Text>(find.byKey(const Key('reverse-progress-known')))
+              .data,
+          'New',
+        );
+
+        await addCard(tester, 'nuevo', 'new');
+        final added = (await repository.listCards()).singleWhere(
+          (card) => card.front == 'nuevo',
+        );
+        expect(added.hasReverse, isTrue);
+        expect(added.reverseLearning, isFalse);
+        expect(added.reverseLastReview, isNull);
+        expect(
+          tester
+              .widget<Text>(find.byKey(Key('forward-progress-${added.id}')))
+              .data,
+          'New',
+        );
+        expect(
+          tester
+              .widget<Text>(find.byKey(Key('reverse-progress-${added.id}')))
+              .data,
+          'New',
+        );
+      },
+    );
   });
 
   testWidgets('a topic, a subtopic, and cards survive closing the database', (

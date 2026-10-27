@@ -124,14 +124,28 @@ void main() {
     },
   );
 
-  test('a waiting reverse counts as new, and two faces can both count', () {
+  test('a waiting reverse counts as new, and a dormant one does not', () {
     final topics = [
       const Topic(id: 'on', name: 'On', reverseDrill: true),
       const Topic(id: 'off', name: 'Off'),
     ];
-    final reversed = spawnReverseFace(
+    final waiting = spawnReverseFace(
       FlashCard(
-        id: 'both',
+        id: 'known',
+        topicId: 'on',
+        front: 'front',
+        back: 'back',
+        learning: false,
+        lastReview: now,
+        intervalSeconds: 7200,
+        difficulty: 1,
+        createdAt: DateTime.utc(2026, 1, 1),
+      ),
+      queuedAt: now,
+    );
+    final dormant = spawnReverseFace(
+      FlashCard(
+        id: 'drilling',
         topicId: 'on',
         front: 'front',
         back: 'back',
@@ -139,7 +153,7 @@ void main() {
         lastReview: now,
         intervalSeconds: 600,
         difficulty: 1,
-        createdAt: DateTime.utc(2026, 1, 1),
+        createdAt: DateTime.utc(2026, 1, 2),
       ),
       queuedAt: now,
     );
@@ -149,14 +163,14 @@ void main() {
         topicId: 'off',
         front: 'front',
         back: 'back',
-        createdAt: DateTime.utc(2026, 1, 2),
+        createdAt: DateTime.utc(2026, 1, 3),
       ),
       queuedAt: now,
     ).copyWith(reverseLearning: true, reverseLastReview: now);
 
     final counts = countStudy(
       topics: topics,
-      cards: [reversed, hidden],
+      cards: [waiting, dormant, hidden],
       scopeTopicId: null,
       now: now,
       parameters: parameters,
