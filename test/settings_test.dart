@@ -267,6 +267,7 @@ Future<void> saveField(WidgetTester tester, String key, String value) async {
 Future<void> flip(WidgetTester tester) async {
   await tester.tap(find.byKey(const Key('flip-button')));
   await tester.pump();
+  await tester.pump(const Duration(milliseconds: 400));
 }
 
 Future<void> press(WidgetTester tester, String key) async {

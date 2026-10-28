@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:rhythm_method_flashcards/app.dart';
 import 'package:rhythm_method_flashcards/data/database.dart';
 import 'package:rhythm_method_flashcards/data/library_repository.dart';
+import 'package:rhythm_method_flashcards/domain/scheduler.dart';
 
 void main() {
   group('in memory', () {
@@ -178,6 +179,82 @@ void main() {
       },
     );
 
+    testWidgets('card rows show state and hide the back', (tester) async {
+      final now = DateTime.now().toUtc();
+      await repository.insertTopic(
+        id: 'topic',
+        name: 'Spanish',
+        createdAt: DateTime.utc(2026, 1, 1),
+      );
+      await repository.insertCard(
+        FlashCard.fresh(
+          id: 'fresh',
+          topicId: 'topic',
+          front: 'fresh-front',
+          back: 'fresh-back',
+          createdAt: DateTime.utc(2026, 2, 1),
+        ),
+      );
+      await repository.insertCard(
+        _listed(
+          id: 'meter',
+          front: 'meter-front',
+          back: 'meter-back',
+          learning: true,
+          lastReview: now,
+          intervalSeconds: 34 * 60,
+          createdAt: DateTime.utc(2026, 2, 2),
+        ),
+      );
+      await repository.insertCard(
+        _listed(
+          id: 'lapsed',
+          front: 'lapsed-front',
+          back: 'lapsed-back',
+          learning: true,
+          lastReview: now,
+          intervalSeconds: 2 * 3600,
+          createdAt: DateTime.utc(2026, 2, 3),
+        ),
+      );
+      await repository.insertCard(
+        _listed(
+          id: 'strong',
+          front: 'strong-front',
+          back: 'strong-back',
+          learning: false,
+          lastReview: now,
+          intervalSeconds: 6 * 3600,
+          createdAt: DateTime.utc(2026, 2, 4),
+        ),
+      );
+      await repository.insertCard(
+        _listed(
+          id: 'due',
+          front: 'due-front',
+          back: 'due-back',
+          learning: false,
+          lastReview: now.subtract(const Duration(hours: 7)),
+          intervalSeconds: 6 * 3600,
+          createdAt: DateTime.utc(2026, 2, 5),
+        ),
+      );
+
+      await pumpApp(tester, repository);
+      await openTopic(tester, 'Spanish');
+
+      expect(find.text('fresh-back'), findsNothing);
+      expect(find.text('meter-back'), findsNothing);
+      expect(find.text('lapsed-back'), findsNothing);
+      expect(find.text('strong-back'), findsNothing);
+      expect(find.text('due-back'), findsNothing);
+      expect(find.text('New'), findsOneWidget);
+      expect(find.text('Learning · 34m / 1h'), findsOneWidget);
+      expect(find.text('Learning · 2h'), findsOneWidget);
+      expect(find.text('Learned · 6h'), findsOneWidget);
+      expect(find.text('Learned · 6h · Due'), findsOneWidget);
+    });
+
     testWidgets('study shows the card front until it is flipped', (
       tester,
     ) async {
@@ -186,6 +263,8 @@ void main() {
       await addRootTopic(tester, 'Spanish', fromEmpty: true);
       await openTopic(tester, 'Spanish');
       await addCard(tester, 'hola', 'hello');
+      expect(find.text('hello'), findsNothing);
+      expect(find.text('New'), findsOneWidget);
       await tester.tap(find.widgetWithText(FilledButton, 'Study'));
       await settle(tester);
 
@@ -202,12 +281,206 @@ void main() {
       expect(appBarText('Spanish'), findsOneWidget);
 
       await tester.tap(find.byKey(const Key('flip-button')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
       await settle(tester);
       expect(
         find.descendant(of: face, matching: find.text('hello')),
         findsOneWidget,
       );
     });
+
+    testWidgets('leaving a study session refreshes the topic list', (
+      tester,
+    ) async {
+      await pumpApp(tester, repository);
+      await addRootTopic(tester, 'Spanish', fromEmpty: true);
+      await openTopic(tester, 'Spanish');
+      await addCard(tester, 'hola', 'hello');
+      expect(find.text('New'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Study'));
+      await settle(tester);
+      await tester.tap(find.byKey(const Key('flip-button')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await settle(tester);
+      await tester.tap(find.byKey(const Key('correct-button')));
+      await tester.pump();
+      await settle(tester);
+      await goBack(tester);
+
+      expect(appBarText('Spanish'), findsOneWidget);
+      expect(find.text('New'), findsNothing);
+      expect(find.text('Learning · 15m / 1h'), findsOneWidget);
+      expect(find.text('hello'), findsNothing);
+    });
+
+    testWidgets(
+      'reverse drill confirms for learned cards and does not pass to a subtopic',
+      (tester) async {
+        await repository.insertTopic(id: 'parent', name: 'Parent');
+        await repository.insertTopic(
+          id: 'child',
+          name: 'Child',
+          parentId: 'parent',
+        );
+        await repository.insertCard(
+          FlashCard(
+            id: 'known',
+            topicId: 'parent',
+            front: 'hola',
+            back: 'hello',
+            learning: false,
+            lastReview: DateTime.utc(2024, 1, 1),
+            intervalSeconds: 7200,
+            difficulty: 1,
+            createdAt: DateTime.utc(2024, 1, 1),
+          ),
+        );
+        await pumpApp(tester, repository);
+        await openTopic(tester, 'Parent');
+
+        SwitchListTile drillSwitch() {
+          return tester.widget<SwitchListTile>(
+            find.byKey(const Key('reverse-drill-switch')),
+          );
+        }
+
+        expect(drillSwitch().value, isFalse);
+        await tester.tap(find.byKey(const Key('reverse-drill-switch')));
+        await elapse(tester);
+        expect(
+          find.textContaining('wait ahead of cards not yet started'),
+          findsOneWidget,
+        );
+        await tester.tap(find.text('Cancel'));
+        await settle(tester);
+        expect(drillSwitch().value, isFalse);
+        expect((await repository.card('known')).hasReverse, isFalse);
+
+        await tester.tap(find.byKey(const Key('reverse-drill-switch')));
+        await elapse(tester);
+        await tester.tap(find.text('Turn on'));
+        await settle(tester);
+        expect(drillSwitch().value, isTrue);
+        expect((await repository.card('known')).hasReverse, isTrue);
+
+        await openTopic(tester, 'Child');
+        expect(drillSwitch().value, isFalse);
+        await tester.tap(find.byKey(const Key('reverse-drill-switch')));
+        await settle(tester);
+        expect(find.text('Turn on'), findsNothing);
+        expect(drillSwitch().value, isTrue);
+        expect((await repository.card('known')).topicId, 'parent');
+      },
+    );
+
+    testWidgets(
+      'reverse columns show both faces and a new card starts new on both',
+      (tester) async {
+        final reviewed = DateTime.now().toUtc();
+        await repository.insertTopic(id: 'parent', name: 'Parent');
+        await repository.insertCard(
+          FlashCard(
+            id: 'known',
+            topicId: 'parent',
+            front: 'hola',
+            back: 'hello',
+            learning: false,
+            lastReview: reviewed,
+            intervalSeconds: 7200,
+            difficulty: 1,
+            createdAt: DateTime.utc(2024, 1, 1),
+          ),
+        );
+        await repository.insertCard(
+          FlashCard.fresh(
+            id: 'fresh',
+            topicId: 'parent',
+            front: 'adios',
+            back: 'goodbye',
+            createdAt: DateTime.utc(2026, 1, 1),
+          ),
+        );
+        await pumpApp(tester, repository);
+        await openTopic(tester, 'Parent');
+
+        expect(find.byKey(const Key('forward-column')), findsNothing);
+        expect(find.byKey(const Key('reverse-column')), findsNothing);
+        expect(find.text('Learned · 2h'), findsOneWidget);
+        expect(find.text('New'), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('reverse-drill-switch')));
+        await elapse(tester);
+        await tester.tap(find.text('Turn on'));
+        await settle(tester);
+
+        expect(find.byKey(const Key('forward-column')), findsOneWidget);
+        expect(find.byKey(const Key('reverse-column')), findsOneWidget);
+        expect(
+          tester
+              .widget<Text>(find.byKey(const Key('forward-progress-known')))
+              .data,
+          'Learned · 2h',
+        );
+        expect(
+          tester
+              .widget<Text>(find.byKey(const Key('reverse-progress-known')))
+              .data,
+          'New',
+        );
+        expect(
+          tester
+              .widget<Text>(find.byKey(const Key('forward-progress-fresh')))
+              .data,
+          'New',
+        );
+        expect(
+          tester
+              .widget<Text>(find.byKey(const Key('reverse-progress-fresh')))
+              .data,
+          'New',
+        );
+
+        await tester.tap(find.byKey(const Key('reverse-drill-switch')));
+        await settle(tester);
+        expect(find.byKey(const Key('forward-column')), findsNothing);
+        expect((await repository.card('known')).hasReverse, isTrue);
+        expect(find.text('Learned · 2h'), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('reverse-drill-switch')));
+        await settle(tester);
+        expect(find.text('Turn on'), findsNothing);
+        expect(find.byKey(const Key('reverse-column')), findsOneWidget);
+        expect(
+          tester
+              .widget<Text>(find.byKey(const Key('reverse-progress-known')))
+              .data,
+          'New',
+        );
+
+        await addCard(tester, 'nuevo', 'new');
+        final added = (await repository.listCards()).singleWhere(
+          (card) => card.front == 'nuevo',
+        );
+        expect(added.hasReverse, isTrue);
+        expect(added.reverseLearning, isFalse);
+        expect(added.reverseLastReview, isNull);
+        expect(
+          tester
+              .widget<Text>(find.byKey(Key('forward-progress-${added.id}')))
+              .data,
+          'New',
+        );
+        expect(
+          tester
+              .widget<Text>(find.byKey(Key('reverse-progress-${added.id}')))
+              .data,
+          'New',
+        );
+      },
+    );
   });
 
   testWidgets('a topic, a subtopic, and cards survive closing the database', (
@@ -270,15 +543,15 @@ void main() {
 
     await openTopic(tester, 'Spanish');
     expect(find.text('hola'), findsOneWidget);
-    expect(find.text('hello'), findsOneWidget);
+    expect(find.text('hello'), findsNothing);
     expect(find.text('adios'), findsOneWidget);
-    expect(find.text('goodbye'), findsOneWidget);
+    expect(find.text('goodbye'), findsNothing);
     expect(find.text('Verbs'), findsOneWidget);
     expect(find.text('ser'), findsNothing);
 
     await openTopic(tester, 'Verbs');
     expect(find.text('ser'), findsOneWidget);
-    expect(find.text('to be'), findsOneWidget);
+    expect(find.text('to be'), findsNothing);
 
     final cards = (await tester.runAsync(reopened.listCards))!;
     expect(cards.map((card) => card.front).toSet(), {'hola', 'adios', 'ser'});
@@ -342,6 +615,28 @@ Future<void> addSubtopic(WidgetTester tester, String name) async {
   await tester.tap(find.text('Add subtopic'));
   await elapse(tester);
   await enterName(tester, name);
+}
+
+FlashCard _listed({
+  required String id,
+  required String front,
+  required String back,
+  required bool learning,
+  required DateTime lastReview,
+  required int intervalSeconds,
+  required DateTime createdAt,
+}) {
+  return FlashCard(
+    id: id,
+    topicId: 'topic',
+    front: front,
+    back: back,
+    learning: learning,
+    lastReview: lastReview,
+    intervalSeconds: intervalSeconds,
+    difficulty: 1,
+    createdAt: createdAt,
+  );
 }
 
 Future<void> addCard(WidgetTester tester, String front, String back) async {

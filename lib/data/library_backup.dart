@@ -11,6 +11,7 @@ final class BackupTopic {
     required this.parentId,
     required this.position,
     required this.createdAt,
+    this.reverseDrill = false,
   });
 
   final String id;
@@ -18,9 +19,13 @@ final class BackupTopic {
   final String? parentId;
   final int position;
   final DateTime createdAt;
+  final bool reverseDrill;
 }
 
-/// One version 1 backup. Review rows are not part of the file.
+/// One backup. Review rows are not part of the file.
+///
+/// Version 2 is what this app writes. Version 1 is still accepted, and it
+/// imports with every reverse switch off and no reverse faces.
 final class LibraryBackup {
   const LibraryBackup({
     required this.topics,
@@ -33,16 +38,17 @@ final class LibraryBackup {
   final SchedulerParameters settings;
 }
 
-/// Version 1 backup of topics, cards, and the five settings.
+/// Version 2 backup of topics, cards, and the five settings.
 ///
-/// Review rows are left out. [parseLibraryBackup] reads this file back.
+/// Review rows are left out. [parseLibraryBackup] reads this file back,
+/// including a version 1 file.
 String libraryBackupJson({
   required List<BackupTopic> topics,
   required List<FlashCard> cards,
   required SchedulerParameters settings,
 }) {
   final payload = <String, Object?>{
-    'version': 1,
+    'version': 2,
     'topics': [
       for (final topic in topics)
         <String, Object?>{
@@ -51,6 +57,7 @@ String libraryBackupJson({
           'parent_id': topic.parentId,
           'position': topic.position,
           'created_at': _timestamp(topic.createdAt),
+          'reverse_drill': topic.reverseDrill,
         },
     ],
     'cards': [
@@ -67,6 +74,7 @@ String libraryBackupJson({
           'interval': card.intervalSeconds,
           'difficulty': card.difficulty,
           'created_at': _timestamp(card.createdAt),
+          'reverse': _reverseJson(card),
         },
     ],
     'settings': <String, Object?>{
@@ -82,8 +90,23 @@ String libraryBackupJson({
 
 String _timestamp(DateTime value) => value.toUtc().toIso8601String();
 
-/// Reads a version 1 backup. Throws [FormatException] when the file cannot
-/// be restored without changing the scheduler's meaning.
+Map<String, Object?>? _reverseJson(FlashCard card) {
+  if (!card.hasReverse) return null;
+  return <String, Object?>{
+    'learning': card.reverseLearning,
+    'last_review': card.reverseLastReview == null
+        ? null
+        : _timestamp(card.reverseLastReview!),
+    'interval': card.reverseIntervalSeconds,
+    'difficulty': card.reverseDifficulty,
+    'queued_at': _timestamp(card.reverseQueuedAt!),
+  };
+}
+
+/// Reads a version 1 or version 2 backup. Throws [FormatException] when the
+/// file cannot be restored without changing the scheduler's meaning.
+///
+/// A version 1 file has the reverse switch off and no reverse faces.
 LibraryBackup parseLibraryBackup(String source) {
   final Object? decoded;
   try {
@@ -96,21 +119,22 @@ LibraryBackup parseLibraryBackup(String source) {
   }
   final json = Map<String, Object?>.from(decoded);
   final version = json['version'];
-  if (version is! num || version != 1) {
+  if (version is! num || (version != 1 && version != 2)) {
     throw const FormatException('Backup version is not supported.');
   }
+  final includeReverse = version == 2;
 
-  final topics = _topicsFrom(json['topics']);
+  final topics = _topicsFrom(json['topics'], includeReverse: includeReverse);
   final topicIds = {for (final topic in topics) topic.id};
   _rejectTopicCycles(topics);
   return LibraryBackup(
     topics: topics,
-    cards: _cardsFrom(json['cards'], topicIds),
+    cards: _cardsFrom(json['cards'], topicIds, includeReverse: includeReverse),
     settings: _settingsFrom(json['settings']),
   );
 }
 
-List<BackupTopic> _topicsFrom(Object? value) {
+List<BackupTopic> _topicsFrom(Object? value, {required bool includeReverse}) {
   if (value is! List) {
     throw const FormatException('Backup is missing topics.');
   }
@@ -147,6 +171,12 @@ List<BackupTopic> _topicsFrom(Object? value) {
     if (createdAt == null) {
       throw FormatException('Topic $id has an invalid created_at.');
     }
+    final reverseDrill = includeReverse
+        ? _asBool(json['reverse_drill'])
+        : false;
+    if (reverseDrill == null) {
+      throw FormatException('Topic $id has an invalid reverse drill switch.');
+    }
     topics.add(
       BackupTopic(
         id: id,
@@ -154,6 +184,7 @@ List<BackupTopic> _topicsFrom(Object? value) {
         parentId: parentId as String?,
         position: position,
         createdAt: createdAt,
+        reverseDrill: reverseDrill,
       ),
     );
   }
@@ -197,7 +228,11 @@ void _rejectTopicCycles(List<BackupTopic> topics) {
   }
 }
 
-List<FlashCard> _cardsFrom(Object? value, Set<String> topicIds) {
+List<FlashCard> _cardsFrom(
+  Object? value,
+  Set<String> topicIds, {
+  required bool includeReverse,
+}) {
   if (value is! List) {
     throw const FormatException('Backup is missing cards.');
   }
@@ -257,6 +292,10 @@ List<FlashCard> _cardsFrom(Object? value, Set<String> topicIds) {
     if (createdAt == null) {
       throw FormatException('Card $id has an invalid created_at.');
     }
+    if (includeReverse && !json.containsKey('reverse')) {
+      throw FormatException('Card $id is missing a reverse face.');
+    }
+    final reverse = _reverseFrom(id, json['reverse'], includeReverse);
     cards.add(
       FlashCard(
         id: id,
@@ -268,10 +307,85 @@ List<FlashCard> _cardsFrom(Object? value, Set<String> topicIds) {
         intervalSeconds: interval,
         difficulty: difficulty,
         createdAt: createdAt,
+        reverseLearning: reverse.learning,
+        reverseLastReview: reverse.lastReview,
+        reverseIntervalSeconds: reverse.intervalSeconds,
+        reverseDifficulty: reverse.difficulty,
+        reverseQueuedAt: reverse.queuedAt,
       ),
     );
   }
   return cards;
+}
+
+final class _ReverseFields {
+  const _ReverseFields({
+    required this.learning,
+    required this.lastReview,
+    required this.intervalSeconds,
+    required this.difficulty,
+    required this.queuedAt,
+  });
+
+  final bool learning;
+  final DateTime? lastReview;
+  final int? intervalSeconds;
+  final double? difficulty;
+  final DateTime? queuedAt;
+
+  static const none = _ReverseFields(
+    learning: false,
+    lastReview: null,
+    intervalSeconds: null,
+    difficulty: null,
+    queuedAt: null,
+  );
+}
+
+_ReverseFields _reverseFrom(String id, Object? value, bool includeReverse) {
+  if (!includeReverse) return _ReverseFields.none;
+  if (value == null) return _ReverseFields.none;
+  if (value is! Map) {
+    throw FormatException('Card $id has an invalid reverse face.');
+  }
+  final json = Map<String, Object?>.from(value);
+  final learning = _asBool(json['learning']);
+  if (learning == null) {
+    throw FormatException('Card $id has an invalid reverse face.');
+  }
+  if (!json.containsKey('last_review')) {
+    throw FormatException('Card $id has an invalid reverse face.');
+  }
+  final rawReview = json['last_review'];
+  DateTime? lastReview;
+  if (rawReview != null) {
+    lastReview = _asTime(rawReview);
+    if (lastReview == null) {
+      throw FormatException('Card $id has an invalid reverse face.');
+    }
+  }
+  final interval = _asInt(json['interval']);
+  if (interval == null ||
+      interval < SchedulerConstants.minimumIntervalSeconds) {
+    throw FormatException('Card $id has an invalid reverse face.');
+  }
+  final difficulty = _asDouble(json['difficulty']);
+  if (difficulty == null ||
+      !(difficulty > 0) ||
+      difficulty > SchedulerConstants.difficultyCap) {
+    throw FormatException('Card $id has an invalid reverse face.');
+  }
+  final queuedAt = _asTime(json['queued_at']);
+  if (queuedAt == null) {
+    throw FormatException('Card $id has an invalid reverse face.');
+  }
+  return _ReverseFields(
+    learning: learning,
+    lastReview: lastReview,
+    intervalSeconds: interval,
+    difficulty: difficulty,
+    queuedAt: queuedAt,
+  );
 }
 
 SchedulerParameters _settingsFrom(Object? value) {
@@ -302,6 +416,11 @@ SchedulerParameters _settingsFrom(Object? value) {
   } on ArgumentError {
     throw const FormatException('Backup settings are not valid.');
   }
+}
+
+bool? _asBool(Object? value) {
+  if (value is bool) return value;
+  return null;
 }
 
 int? _asInt(Object? value) {

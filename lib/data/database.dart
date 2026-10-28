@@ -13,6 +13,9 @@ class Topics extends Table {
   IntColumn get position => integer()();
   DateTimeColumn get createdAt => dateTime()();
 
+  /// Back-to-front drills for this topic's own cards. Not inherited.
+  BoolColumn get reverseDrill => boolean().withDefault(const Constant(false))();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -29,6 +32,15 @@ class Cards extends Table {
   IntColumn get intervalSeconds => integer()();
   RealColumn get difficulty => real()();
   DateTimeColumn get createdAt => dateTime()();
+
+  /// Null [reverseQueuedAt] means there is no reverse face. The other reverse
+  /// columns are null in that case, except [reverseLearning], which stays false.
+  BoolColumn get reverseLearning =>
+      boolean().withDefault(const Constant(false))();
+  DateTimeColumn get reverseLastReview => dateTime().nullable()();
+  IntColumn get reverseIntervalSeconds => integer().nullable()();
+  RealColumn get reverseDifficulty => real().nullable()();
+  DateTimeColumn get reverseQueuedAt => dateTime().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -51,6 +63,9 @@ class Reviews extends Table {
   /// Not part of the grade arithmetic. Stored so a persisted undo can put
   /// [FlashCard.lastReview] back.
   DateTimeColumn get lastReviewBefore => dateTime().nullable()();
+
+  /// `forward` or `reverse`. Undo shows this face again.
+  TextColumn get direction => text().withDefault(const Constant('forward'))();
 }
 
 @DataClassName('SettingRow')
@@ -71,10 +86,21 @@ class LibraryDatabase extends _$LibraryDatabase {
   LibraryDatabase(super.executor);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
+    onUpgrade: (migrator, from, to) async {
+      if (from < 2) {
+        await migrator.addColumn(topics, topics.reverseDrill);
+        await migrator.addColumn(cards, cards.reverseLearning);
+        await migrator.addColumn(cards, cards.reverseLastReview);
+        await migrator.addColumn(cards, cards.reverseIntervalSeconds);
+        await migrator.addColumn(cards, cards.reverseDifficulty);
+        await migrator.addColumn(cards, cards.reverseQueuedAt);
+        await migrator.addColumn(reviews, reviews.direction);
+      }
+    },
     beforeOpen: (details) async {
       await customStatement('PRAGMA foreign_keys = ON');
       final existing = await select(settings).getSingleOrNull();

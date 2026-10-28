@@ -60,13 +60,14 @@ void main() {
       ),
     );
 
-    expect(json, startsWith('{\n  "version": 1'));
+    expect(json, startsWith('{\n  "version": 2'));
     final decoded = jsonDecode(json) as Map<String, Object?>;
     expect(decoded.keys.toList(), ['version', 'topics', 'cards', 'settings']);
 
     final topics = (decoded['topics']! as List<Object?>)
         .cast<Map<String, Object?>>();
     expect(topics[0]['parent_id'], isNull);
+    expect(topics[0]['reverse_drill'], isFalse);
     expect(topics[0]['created_at'], '2026-03-01T15:30:00.000Z');
     expect(topics[1]['id'], 'child');
     expect(topics[1]['parent_id'], 'parent');
@@ -85,6 +86,7 @@ void main() {
       'interval',
       'difficulty',
       'created_at',
+      'reverse',
     ]);
     expect(cards[0]['front'], 'hola');
     expect(cards[0]['back'], 'hello');
@@ -94,6 +96,7 @@ void main() {
     expect(cards[0]['interval'], 600);
     expect(cards[0]['difficulty'], 1);
     expect(cards[0]['created_at'], '2026-03-01T15:30:00.000Z');
+    expect(cards[0]['reverse'], isNull);
 
     expect(cards[1]['front'], 'adios');
     expect(cards[1]['learning'], isTrue);
@@ -339,6 +342,69 @@ void main() {
     expect(parsed.settings.difficultyFactor, 0);
     expect(parsed.settings.learningWindowSize, 3);
     expect(parsed.settings.learnedThreshold, const Duration(hours: 2));
+    expect(parsed.cards.single.hasReverse, isFalse);
+    expect(parsed.topics.every((topic) => topic.reverseDrill == false), isTrue);
+  });
+
+  test(
+    'a version 1 backup imports with the switch off and no reverse faces',
+    () {
+      final parsed = parseLibraryBackup(
+        '{"version":1,"topics":[{"id":"a","name":"A","parent_id":null,'
+        '"position":0,"created_at":"2026-03-01T00:00:00.000Z"}],'
+        '"cards":[{"id":"c","topic_id":"a","front":"hola","back":"hello",'
+        '"learning":false,"last_review":null,"interval":600,"difficulty":1,'
+        '"created_at":"2026-03-01T00:00:00.000Z"}],'
+        '"settings":{"correct_factor":1.5,"wrong_factor":0.5,'
+        '"difficulty_factor":0.01,"learning_window_size":10,'
+        '"learned_threshold":3600}}',
+      );
+      expect(parsed.topics.single.reverseDrill, isFalse);
+      expect(parsed.cards.single.hasReverse, isFalse);
+      expect(parsed.cards.single.front, 'hola');
+    },
+  );
+
+  test('a version 2 backup keeps a reverse face', () {
+    final queued = DateTime.utc(2026, 6, 2, 8);
+    final card = spawnReverseFace(
+      FlashCard(
+        id: 'c',
+        topicId: 'a',
+        front: 'hola',
+        back: 'hello',
+        learning: false,
+        lastReview: DateTime.utc(2026, 1, 1),
+        intervalSeconds: 7200,
+        difficulty: 2,
+        createdAt: DateTime.utc(2026, 1, 1),
+      ),
+      queuedAt: queued,
+    );
+    final parsed = parseLibraryBackup(
+      libraryBackupJson(
+        topics: [
+          BackupTopic(
+            id: 'a',
+            name: 'A',
+            parentId: null,
+            position: 0,
+            createdAt: DateTime.utc(2026, 1, 1),
+            reverseDrill: true,
+          ),
+        ],
+        cards: [card],
+        settings: SchedulerParameters.defaults(),
+      ),
+    );
+    expect(parsed.topics.single.reverseDrill, isTrue);
+    final restored = parsed.cards.single;
+    expect(restored.reverseQueuedAt, queued);
+    expect(restored.reverseIntervalSeconds, 600);
+    expect(restored.reverseDifficulty, 1);
+    expect(restored.reverseLearning, isFalse);
+    expect(restored.reverseLastReview, isNull);
+    expect(restored.difficulty, 2);
   });
 
   test('a backup that cannot be restored is rejected', () {
@@ -351,7 +417,7 @@ void main() {
     expect(() => parseLibraryBackup('not json'), throwsFormatException);
     expect(
       () => parseLibraryBackup(
-        '{"version":2,"topics":[],"cards":[],"settings":{}}',
+        '{"version":3,"topics":[],"cards":[],"settings":{}}',
       ),
       throwsBackupMessage('Backup version is not supported.'),
     );

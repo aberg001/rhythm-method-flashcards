@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../domain/scheduler.dart';
 import '../study/study_session_screen.dart';
 import 'card_editor_screen.dart';
+import 'card_progress.dart';
 import 'ids.dart';
 import 'library_scope.dart';
 import 'name_dialog.dart';
@@ -21,6 +22,7 @@ class TopicScreen extends StatefulWidget {
 class _TopicScreenState extends State<TopicScreen> {
   List<Topic> _topics = [];
   List<FlashCard> _cards = [];
+  SchedulerParameters _parameters = SchedulerParameters.defaults();
   var _loaded = false;
   var _generation = 0;
 
@@ -36,11 +38,22 @@ class _TopicScreenState extends State<TopicScreen> {
     final generation = ++_generation;
     final repository = LibraryScope.of(context);
     final topics = await repository.listTopics();
-    final cards = await repository.listCards();
+    var cards = await repository.listCards();
+    final parameters = await repository.loadSettings();
+    final topic = topics.where((item) => item.id == widget.topicId).firstOrNull;
+    if (topic != null && topic.reverseDrill) {
+      await repository.ensureReverseFaces(
+        topic.id,
+        now: DateTime.now().toUtc(),
+      );
+      if (!mounted || generation != _generation) return;
+      cards = await repository.listCards();
+    }
     if (!mounted || generation != _generation) return;
     setState(() {
       _topics = topics;
       _cards = cards;
+      _parameters = parameters;
       _loaded = true;
     });
   }
@@ -147,13 +160,42 @@ class _TopicScreenState extends State<TopicScreen> {
     await _load();
   }
 
-  void _study(Topic topic) {
-    Navigator.of(context).push(
+  Future<void> _setReverseDrill(bool enabled) async {
+    final topic = _topic;
+    if (topic == null || topic.reverseDrill == enabled) return;
+    if (enabled) {
+      final count = _ownCards
+          .where((card) => !card.hasReverse && cardIsLearned(card, _parameters))
+          .length;
+      if (count > 0) {
+        final learned = count == 1
+            ? '1 learned card will gain a back-to-front drill.'
+            : '$count learned cards will gain a back-to-front drill.';
+        final confirmed = await showConfirmDialog(
+          context,
+          title: 'Drill these backs?',
+          message: '$learned Those drills wait ahead of cards not yet started.',
+          confirmLabel: 'Turn on',
+        );
+        if (!confirmed || !mounted) return;
+      }
+    }
+    await LibraryScope.of(
+      context,
+    ).setReverseDrill(topic.id, enabled: enabled, now: DateTime.now().toUtc());
+    if (!mounted) return;
+    await _load();
+  }
+
+  Future<void> _study(Topic topic) async {
+    await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (context) =>
             StudySessionScreen(title: topic.name, scopeTopicId: topic.id),
       ),
     );
+    if (!mounted) return;
+    await _load();
   }
 
   @override
@@ -195,6 +237,17 @@ class _TopicScreenState extends State<TopicScreen> {
               ),
             ),
           ),
+          SliverToBoxAdapter(
+            child: SwitchListTile(
+              key: const Key('reverse-drill-switch'),
+              title: const Text('Reverse drill'),
+              subtitle: const Text(
+                'Every card also has a back-to-front drill. It waits until the front is learned, then comes before cards not yet started.',
+              ),
+              value: topic.reverseDrill,
+              onChanged: _setReverseDrill,
+            ),
+          ),
           const SliverToBoxAdapter(child: _SectionHeader('Subtopics')),
           SliverList.builder(
             itemCount: children.length,
@@ -224,6 +277,8 @@ class _TopicScreenState extends State<TopicScreen> {
             ),
           ),
           const SliverToBoxAdapter(child: _SectionHeader('Cards')),
+          if (topic.reverseDrill && cards.isNotEmpty)
+            const SliverToBoxAdapter(child: _FaceColumnHeader()),
           if (cards.isEmpty)
             const SliverToBoxAdapter(
               child: Padding(
@@ -235,16 +290,44 @@ class _TopicScreenState extends State<TopicScreen> {
             itemCount: cards.length,
             itemBuilder: (context, index) {
               final card = cards[index];
+              final now = DateTime.now().toUtc();
+              if (!topic.reverseDrill) {
+                return ListTile(
+                  visualDensity: VisualDensity.compact,
+                  title: Text(
+                    card.front,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  trailing: Text(
+                    cardProgressLabel(
+                      card: card,
+                      parameters: _parameters,
+                      now: now,
+                    ),
+                    maxLines: 1,
+                  ),
+                  onTap: () => _openCard(card),
+                );
+              }
               return ListTile(
-                title: Text(
-                  card.front,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                subtitle: Text(
-                  card.back,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+                visualDensity: VisualDensity.compact,
+                title: _FaceColumns(
+                  front: card.front,
+                  forward: faceProgressLabel(
+                    card: card,
+                    face: StudyFace.forward,
+                    parameters: _parameters,
+                    now: now,
+                  ),
+                  reverse: faceProgressLabel(
+                    card: card,
+                    face: StudyFace.reverse,
+                    parameters: _parameters,
+                    now: now,
+                  ),
+                  forwardKey: Key('forward-progress-${card.id}'),
+                  reverseKey: Key('reverse-progress-${card.id}'),
                 ),
                 onTap: () => _openCard(card),
               );
@@ -263,6 +346,92 @@ class _TopicScreenState extends State<TopicScreen> {
           SliverPadding(padding: EdgeInsets.only(bottom: bottom + 16)),
         ],
       ),
+    );
+  }
+}
+
+const _statusColumnWidth = 128.0;
+
+class _FaceColumnHeader extends StatelessWidget {
+  const _FaceColumnHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme.labelLarge;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+      child: Row(
+        children: [
+          const Spacer(),
+          SizedBox(
+            width: _statusColumnWidth,
+            child: Text(
+              'Forward',
+              key: const Key('forward-column'),
+              textAlign: TextAlign.end,
+              style: style,
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: _statusColumnWidth,
+            child: Text(
+              'Reverse',
+              key: const Key('reverse-column'),
+              textAlign: TextAlign.end,
+              style: style,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FaceColumns extends StatelessWidget {
+  const _FaceColumns({
+    required this.front,
+    required this.forward,
+    required this.reverse,
+    required this.forwardKey,
+    required this.reverseKey,
+  });
+
+  final String front;
+  final String forward;
+  final String reverse;
+  final Key forwardKey;
+  final Key reverseKey;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme.bodyMedium;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Text(front, maxLines: 1, overflow: TextOverflow.ellipsis),
+        ),
+        SizedBox(
+          width: _statusColumnWidth,
+          child: Text(
+            forward,
+            key: forwardKey,
+            textAlign: TextAlign.end,
+            style: style,
+          ),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: _statusColumnWidth,
+          child: Text(
+            reverse,
+            key: reverseKey,
+            textAlign: TextAlign.end,
+            style: style,
+          ),
+        ),
+      ],
     );
   }
 }

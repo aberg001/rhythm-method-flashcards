@@ -62,6 +62,21 @@ class $TopicsTable extends Topics with TableInfo<$TopicsTable, TopicRow> {
     type: DriftSqlType.dateTime,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _reverseDrillMeta = const VerificationMeta(
+    'reverseDrill',
+  );
+  @override
+  late final GeneratedColumn<bool> reverseDrill = GeneratedColumn<bool>(
+    'reverse_drill',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("reverse_drill" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -69,6 +84,7 @@ class $TopicsTable extends Topics with TableInfo<$TopicsTable, TopicRow> {
     name,
     position,
     createdAt,
+    reverseDrill,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -117,6 +133,15 @@ class $TopicsTable extends Topics with TableInfo<$TopicsTable, TopicRow> {
     } else if (isInserting) {
       context.missing(_createdAtMeta);
     }
+    if (data.containsKey('reverse_drill')) {
+      context.handle(
+        _reverseDrillMeta,
+        reverseDrill.isAcceptableOrUnknown(
+          data['reverse_drill']!,
+          _reverseDrillMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -146,6 +171,10 @@ class $TopicsTable extends Topics with TableInfo<$TopicsTable, TopicRow> {
         DriftSqlType.dateTime,
         data['${effectivePrefix}created_at'],
       )!,
+      reverseDrill: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}reverse_drill'],
+      )!,
     );
   }
 
@@ -161,12 +190,16 @@ class TopicRow extends DataClass implements Insertable<TopicRow> {
   final String name;
   final int position;
   final DateTime createdAt;
+
+  /// Back-to-front drills for this topic's own cards. Not inherited.
+  final bool reverseDrill;
   const TopicRow({
     required this.id,
     this.parentId,
     required this.name,
     required this.position,
     required this.createdAt,
+    required this.reverseDrill,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -178,6 +211,7 @@ class TopicRow extends DataClass implements Insertable<TopicRow> {
     map['name'] = Variable<String>(name);
     map['position'] = Variable<int>(position);
     map['created_at'] = Variable<DateTime>(createdAt);
+    map['reverse_drill'] = Variable<bool>(reverseDrill);
     return map;
   }
 
@@ -190,6 +224,7 @@ class TopicRow extends DataClass implements Insertable<TopicRow> {
       name: Value(name),
       position: Value(position),
       createdAt: Value(createdAt),
+      reverseDrill: Value(reverseDrill),
     );
   }
 
@@ -204,6 +239,7 @@ class TopicRow extends DataClass implements Insertable<TopicRow> {
       name: serializer.fromJson<String>(json['name']),
       position: serializer.fromJson<int>(json['position']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      reverseDrill: serializer.fromJson<bool>(json['reverseDrill']),
     );
   }
   @override
@@ -215,6 +251,7 @@ class TopicRow extends DataClass implements Insertable<TopicRow> {
       'name': serializer.toJson<String>(name),
       'position': serializer.toJson<int>(position),
       'createdAt': serializer.toJson<DateTime>(createdAt),
+      'reverseDrill': serializer.toJson<bool>(reverseDrill),
     };
   }
 
@@ -224,12 +261,14 @@ class TopicRow extends DataClass implements Insertable<TopicRow> {
     String? name,
     int? position,
     DateTime? createdAt,
+    bool? reverseDrill,
   }) => TopicRow(
     id: id ?? this.id,
     parentId: parentId.present ? parentId.value : this.parentId,
     name: name ?? this.name,
     position: position ?? this.position,
     createdAt: createdAt ?? this.createdAt,
+    reverseDrill: reverseDrill ?? this.reverseDrill,
   );
   TopicRow copyWithCompanion(TopicsCompanion data) {
     return TopicRow(
@@ -238,6 +277,9 @@ class TopicRow extends DataClass implements Insertable<TopicRow> {
       name: data.name.present ? data.name.value : this.name,
       position: data.position.present ? data.position.value : this.position,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      reverseDrill: data.reverseDrill.present
+          ? data.reverseDrill.value
+          : this.reverseDrill,
     );
   }
 
@@ -248,13 +290,15 @@ class TopicRow extends DataClass implements Insertable<TopicRow> {
           ..write('parentId: $parentId, ')
           ..write('name: $name, ')
           ..write('position: $position, ')
-          ..write('createdAt: $createdAt')
+          ..write('createdAt: $createdAt, ')
+          ..write('reverseDrill: $reverseDrill')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(id, parentId, name, position, createdAt);
+  int get hashCode =>
+      Object.hash(id, parentId, name, position, createdAt, reverseDrill);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -263,7 +307,8 @@ class TopicRow extends DataClass implements Insertable<TopicRow> {
           other.parentId == this.parentId &&
           other.name == this.name &&
           other.position == this.position &&
-          other.createdAt == this.createdAt);
+          other.createdAt == this.createdAt &&
+          other.reverseDrill == this.reverseDrill);
 }
 
 class TopicsCompanion extends UpdateCompanion<TopicRow> {
@@ -272,6 +317,7 @@ class TopicsCompanion extends UpdateCompanion<TopicRow> {
   final Value<String> name;
   final Value<int> position;
   final Value<DateTime> createdAt;
+  final Value<bool> reverseDrill;
   final Value<int> rowid;
   const TopicsCompanion({
     this.id = const Value.absent(),
@@ -279,6 +325,7 @@ class TopicsCompanion extends UpdateCompanion<TopicRow> {
     this.name = const Value.absent(),
     this.position = const Value.absent(),
     this.createdAt = const Value.absent(),
+    this.reverseDrill = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   TopicsCompanion.insert({
@@ -287,6 +334,7 @@ class TopicsCompanion extends UpdateCompanion<TopicRow> {
     required String name,
     required int position,
     required DateTime createdAt,
+    this.reverseDrill = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        name = Value(name),
@@ -298,6 +346,7 @@ class TopicsCompanion extends UpdateCompanion<TopicRow> {
     Expression<String>? name,
     Expression<int>? position,
     Expression<DateTime>? createdAt,
+    Expression<bool>? reverseDrill,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -306,6 +355,7 @@ class TopicsCompanion extends UpdateCompanion<TopicRow> {
       if (name != null) 'name': name,
       if (position != null) 'position': position,
       if (createdAt != null) 'created_at': createdAt,
+      if (reverseDrill != null) 'reverse_drill': reverseDrill,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -316,6 +366,7 @@ class TopicsCompanion extends UpdateCompanion<TopicRow> {
     Value<String>? name,
     Value<int>? position,
     Value<DateTime>? createdAt,
+    Value<bool>? reverseDrill,
     Value<int>? rowid,
   }) {
     return TopicsCompanion(
@@ -324,6 +375,7 @@ class TopicsCompanion extends UpdateCompanion<TopicRow> {
       name: name ?? this.name,
       position: position ?? this.position,
       createdAt: createdAt ?? this.createdAt,
+      reverseDrill: reverseDrill ?? this.reverseDrill,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -346,6 +398,9 @@ class TopicsCompanion extends UpdateCompanion<TopicRow> {
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
     }
+    if (reverseDrill.present) {
+      map['reverse_drill'] = Variable<bool>(reverseDrill.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -360,6 +415,7 @@ class TopicsCompanion extends UpdateCompanion<TopicRow> {
           ..write('name: $name, ')
           ..write('position: $position, ')
           ..write('createdAt: $createdAt, ')
+          ..write('reverseDrill: $reverseDrill, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -470,6 +526,67 @@ class $CardsTable extends Cards with TableInfo<$CardsTable, CardRow> {
     type: DriftSqlType.dateTime,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _reverseLearningMeta = const VerificationMeta(
+    'reverseLearning',
+  );
+  @override
+  late final GeneratedColumn<bool> reverseLearning = GeneratedColumn<bool>(
+    'reverse_learning',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("reverse_learning" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _reverseLastReviewMeta = const VerificationMeta(
+    'reverseLastReview',
+  );
+  @override
+  late final GeneratedColumn<DateTime> reverseLastReview =
+      GeneratedColumn<DateTime>(
+        'reverse_last_review',
+        aliasedName,
+        true,
+        type: DriftSqlType.dateTime,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _reverseIntervalSecondsMeta =
+      const VerificationMeta('reverseIntervalSeconds');
+  @override
+  late final GeneratedColumn<int> reverseIntervalSeconds = GeneratedColumn<int>(
+    'reverse_interval_seconds',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _reverseDifficultyMeta = const VerificationMeta(
+    'reverseDifficulty',
+  );
+  @override
+  late final GeneratedColumn<double> reverseDifficulty =
+      GeneratedColumn<double>(
+        'reverse_difficulty',
+        aliasedName,
+        true,
+        type: DriftSqlType.double,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _reverseQueuedAtMeta = const VerificationMeta(
+    'reverseQueuedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> reverseQueuedAt =
+      GeneratedColumn<DateTime>(
+        'reverse_queued_at',
+        aliasedName,
+        true,
+        type: DriftSqlType.dateTime,
+        requiredDuringInsert: false,
+      );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -481,6 +598,11 @@ class $CardsTable extends Cards with TableInfo<$CardsTable, CardRow> {
     intervalSeconds,
     difficulty,
     createdAt,
+    reverseLearning,
+    reverseLastReview,
+    reverseIntervalSeconds,
+    reverseDifficulty,
+    reverseQueuedAt,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -564,6 +686,51 @@ class $CardsTable extends Cards with TableInfo<$CardsTable, CardRow> {
     } else if (isInserting) {
       context.missing(_createdAtMeta);
     }
+    if (data.containsKey('reverse_learning')) {
+      context.handle(
+        _reverseLearningMeta,
+        reverseLearning.isAcceptableOrUnknown(
+          data['reverse_learning']!,
+          _reverseLearningMeta,
+        ),
+      );
+    }
+    if (data.containsKey('reverse_last_review')) {
+      context.handle(
+        _reverseLastReviewMeta,
+        reverseLastReview.isAcceptableOrUnknown(
+          data['reverse_last_review']!,
+          _reverseLastReviewMeta,
+        ),
+      );
+    }
+    if (data.containsKey('reverse_interval_seconds')) {
+      context.handle(
+        _reverseIntervalSecondsMeta,
+        reverseIntervalSeconds.isAcceptableOrUnknown(
+          data['reverse_interval_seconds']!,
+          _reverseIntervalSecondsMeta,
+        ),
+      );
+    }
+    if (data.containsKey('reverse_difficulty')) {
+      context.handle(
+        _reverseDifficultyMeta,
+        reverseDifficulty.isAcceptableOrUnknown(
+          data['reverse_difficulty']!,
+          _reverseDifficultyMeta,
+        ),
+      );
+    }
+    if (data.containsKey('reverse_queued_at')) {
+      context.handle(
+        _reverseQueuedAtMeta,
+        reverseQueuedAt.isAcceptableOrUnknown(
+          data['reverse_queued_at']!,
+          _reverseQueuedAtMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -609,6 +776,26 @@ class $CardsTable extends Cards with TableInfo<$CardsTable, CardRow> {
         DriftSqlType.dateTime,
         data['${effectivePrefix}created_at'],
       )!,
+      reverseLearning: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}reverse_learning'],
+      )!,
+      reverseLastReview: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}reverse_last_review'],
+      ),
+      reverseIntervalSeconds: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}reverse_interval_seconds'],
+      ),
+      reverseDifficulty: attachedDatabase.typeMapping.read(
+        DriftSqlType.double,
+        data['${effectivePrefix}reverse_difficulty'],
+      ),
+      reverseQueuedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}reverse_queued_at'],
+      ),
     );
   }
 
@@ -628,6 +815,14 @@ class CardRow extends DataClass implements Insertable<CardRow> {
   final int intervalSeconds;
   final double difficulty;
   final DateTime createdAt;
+
+  /// Null [reverseQueuedAt] means there is no reverse face. The other reverse
+  /// columns are null in that case, except [reverseLearning], which stays false.
+  final bool reverseLearning;
+  final DateTime? reverseLastReview;
+  final int? reverseIntervalSeconds;
+  final double? reverseDifficulty;
+  final DateTime? reverseQueuedAt;
   const CardRow({
     required this.id,
     required this.topicId,
@@ -638,6 +833,11 @@ class CardRow extends DataClass implements Insertable<CardRow> {
     required this.intervalSeconds,
     required this.difficulty,
     required this.createdAt,
+    required this.reverseLearning,
+    this.reverseLastReview,
+    this.reverseIntervalSeconds,
+    this.reverseDifficulty,
+    this.reverseQueuedAt,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -653,6 +853,19 @@ class CardRow extends DataClass implements Insertable<CardRow> {
     map['interval_seconds'] = Variable<int>(intervalSeconds);
     map['difficulty'] = Variable<double>(difficulty);
     map['created_at'] = Variable<DateTime>(createdAt);
+    map['reverse_learning'] = Variable<bool>(reverseLearning);
+    if (!nullToAbsent || reverseLastReview != null) {
+      map['reverse_last_review'] = Variable<DateTime>(reverseLastReview);
+    }
+    if (!nullToAbsent || reverseIntervalSeconds != null) {
+      map['reverse_interval_seconds'] = Variable<int>(reverseIntervalSeconds);
+    }
+    if (!nullToAbsent || reverseDifficulty != null) {
+      map['reverse_difficulty'] = Variable<double>(reverseDifficulty);
+    }
+    if (!nullToAbsent || reverseQueuedAt != null) {
+      map['reverse_queued_at'] = Variable<DateTime>(reverseQueuedAt);
+    }
     return map;
   }
 
@@ -669,6 +882,19 @@ class CardRow extends DataClass implements Insertable<CardRow> {
       intervalSeconds: Value(intervalSeconds),
       difficulty: Value(difficulty),
       createdAt: Value(createdAt),
+      reverseLearning: Value(reverseLearning),
+      reverseLastReview: reverseLastReview == null && nullToAbsent
+          ? const Value.absent()
+          : Value(reverseLastReview),
+      reverseIntervalSeconds: reverseIntervalSeconds == null && nullToAbsent
+          ? const Value.absent()
+          : Value(reverseIntervalSeconds),
+      reverseDifficulty: reverseDifficulty == null && nullToAbsent
+          ? const Value.absent()
+          : Value(reverseDifficulty),
+      reverseQueuedAt: reverseQueuedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(reverseQueuedAt),
     );
   }
 
@@ -687,6 +913,17 @@ class CardRow extends DataClass implements Insertable<CardRow> {
       intervalSeconds: serializer.fromJson<int>(json['intervalSeconds']),
       difficulty: serializer.fromJson<double>(json['difficulty']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      reverseLearning: serializer.fromJson<bool>(json['reverseLearning']),
+      reverseLastReview: serializer.fromJson<DateTime?>(
+        json['reverseLastReview'],
+      ),
+      reverseIntervalSeconds: serializer.fromJson<int?>(
+        json['reverseIntervalSeconds'],
+      ),
+      reverseDifficulty: serializer.fromJson<double?>(
+        json['reverseDifficulty'],
+      ),
+      reverseQueuedAt: serializer.fromJson<DateTime?>(json['reverseQueuedAt']),
     );
   }
   @override
@@ -702,6 +939,11 @@ class CardRow extends DataClass implements Insertable<CardRow> {
       'intervalSeconds': serializer.toJson<int>(intervalSeconds),
       'difficulty': serializer.toJson<double>(difficulty),
       'createdAt': serializer.toJson<DateTime>(createdAt),
+      'reverseLearning': serializer.toJson<bool>(reverseLearning),
+      'reverseLastReview': serializer.toJson<DateTime?>(reverseLastReview),
+      'reverseIntervalSeconds': serializer.toJson<int?>(reverseIntervalSeconds),
+      'reverseDifficulty': serializer.toJson<double?>(reverseDifficulty),
+      'reverseQueuedAt': serializer.toJson<DateTime?>(reverseQueuedAt),
     };
   }
 
@@ -715,6 +957,11 @@ class CardRow extends DataClass implements Insertable<CardRow> {
     int? intervalSeconds,
     double? difficulty,
     DateTime? createdAt,
+    bool? reverseLearning,
+    Value<DateTime?> reverseLastReview = const Value.absent(),
+    Value<int?> reverseIntervalSeconds = const Value.absent(),
+    Value<double?> reverseDifficulty = const Value.absent(),
+    Value<DateTime?> reverseQueuedAt = const Value.absent(),
   }) => CardRow(
     id: id ?? this.id,
     topicId: topicId ?? this.topicId,
@@ -725,6 +972,19 @@ class CardRow extends DataClass implements Insertable<CardRow> {
     intervalSeconds: intervalSeconds ?? this.intervalSeconds,
     difficulty: difficulty ?? this.difficulty,
     createdAt: createdAt ?? this.createdAt,
+    reverseLearning: reverseLearning ?? this.reverseLearning,
+    reverseLastReview: reverseLastReview.present
+        ? reverseLastReview.value
+        : this.reverseLastReview,
+    reverseIntervalSeconds: reverseIntervalSeconds.present
+        ? reverseIntervalSeconds.value
+        : this.reverseIntervalSeconds,
+    reverseDifficulty: reverseDifficulty.present
+        ? reverseDifficulty.value
+        : this.reverseDifficulty,
+    reverseQueuedAt: reverseQueuedAt.present
+        ? reverseQueuedAt.value
+        : this.reverseQueuedAt,
   );
   CardRow copyWithCompanion(CardsCompanion data) {
     return CardRow(
@@ -743,6 +1003,21 @@ class CardRow extends DataClass implements Insertable<CardRow> {
           ? data.difficulty.value
           : this.difficulty,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      reverseLearning: data.reverseLearning.present
+          ? data.reverseLearning.value
+          : this.reverseLearning,
+      reverseLastReview: data.reverseLastReview.present
+          ? data.reverseLastReview.value
+          : this.reverseLastReview,
+      reverseIntervalSeconds: data.reverseIntervalSeconds.present
+          ? data.reverseIntervalSeconds.value
+          : this.reverseIntervalSeconds,
+      reverseDifficulty: data.reverseDifficulty.present
+          ? data.reverseDifficulty.value
+          : this.reverseDifficulty,
+      reverseQueuedAt: data.reverseQueuedAt.present
+          ? data.reverseQueuedAt.value
+          : this.reverseQueuedAt,
     );
   }
 
@@ -757,7 +1032,12 @@ class CardRow extends DataClass implements Insertable<CardRow> {
           ..write('lastReview: $lastReview, ')
           ..write('intervalSeconds: $intervalSeconds, ')
           ..write('difficulty: $difficulty, ')
-          ..write('createdAt: $createdAt')
+          ..write('createdAt: $createdAt, ')
+          ..write('reverseLearning: $reverseLearning, ')
+          ..write('reverseLastReview: $reverseLastReview, ')
+          ..write('reverseIntervalSeconds: $reverseIntervalSeconds, ')
+          ..write('reverseDifficulty: $reverseDifficulty, ')
+          ..write('reverseQueuedAt: $reverseQueuedAt')
           ..write(')'))
         .toString();
   }
@@ -773,6 +1053,11 @@ class CardRow extends DataClass implements Insertable<CardRow> {
     intervalSeconds,
     difficulty,
     createdAt,
+    reverseLearning,
+    reverseLastReview,
+    reverseIntervalSeconds,
+    reverseDifficulty,
+    reverseQueuedAt,
   );
   @override
   bool operator ==(Object other) =>
@@ -786,7 +1071,12 @@ class CardRow extends DataClass implements Insertable<CardRow> {
           other.lastReview == this.lastReview &&
           other.intervalSeconds == this.intervalSeconds &&
           other.difficulty == this.difficulty &&
-          other.createdAt == this.createdAt);
+          other.createdAt == this.createdAt &&
+          other.reverseLearning == this.reverseLearning &&
+          other.reverseLastReview == this.reverseLastReview &&
+          other.reverseIntervalSeconds == this.reverseIntervalSeconds &&
+          other.reverseDifficulty == this.reverseDifficulty &&
+          other.reverseQueuedAt == this.reverseQueuedAt);
 }
 
 class CardsCompanion extends UpdateCompanion<CardRow> {
@@ -799,6 +1089,11 @@ class CardsCompanion extends UpdateCompanion<CardRow> {
   final Value<int> intervalSeconds;
   final Value<double> difficulty;
   final Value<DateTime> createdAt;
+  final Value<bool> reverseLearning;
+  final Value<DateTime?> reverseLastReview;
+  final Value<int?> reverseIntervalSeconds;
+  final Value<double?> reverseDifficulty;
+  final Value<DateTime?> reverseQueuedAt;
   final Value<int> rowid;
   const CardsCompanion({
     this.id = const Value.absent(),
@@ -810,6 +1105,11 @@ class CardsCompanion extends UpdateCompanion<CardRow> {
     this.intervalSeconds = const Value.absent(),
     this.difficulty = const Value.absent(),
     this.createdAt = const Value.absent(),
+    this.reverseLearning = const Value.absent(),
+    this.reverseLastReview = const Value.absent(),
+    this.reverseIntervalSeconds = const Value.absent(),
+    this.reverseDifficulty = const Value.absent(),
+    this.reverseQueuedAt = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   CardsCompanion.insert({
@@ -822,6 +1122,11 @@ class CardsCompanion extends UpdateCompanion<CardRow> {
     required int intervalSeconds,
     required double difficulty,
     required DateTime createdAt,
+    this.reverseLearning = const Value.absent(),
+    this.reverseLastReview = const Value.absent(),
+    this.reverseIntervalSeconds = const Value.absent(),
+    this.reverseDifficulty = const Value.absent(),
+    this.reverseQueuedAt = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        topicId = Value(topicId),
@@ -841,6 +1146,11 @@ class CardsCompanion extends UpdateCompanion<CardRow> {
     Expression<int>? intervalSeconds,
     Expression<double>? difficulty,
     Expression<DateTime>? createdAt,
+    Expression<bool>? reverseLearning,
+    Expression<DateTime>? reverseLastReview,
+    Expression<int>? reverseIntervalSeconds,
+    Expression<double>? reverseDifficulty,
+    Expression<DateTime>? reverseQueuedAt,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -853,6 +1163,12 @@ class CardsCompanion extends UpdateCompanion<CardRow> {
       if (intervalSeconds != null) 'interval_seconds': intervalSeconds,
       if (difficulty != null) 'difficulty': difficulty,
       if (createdAt != null) 'created_at': createdAt,
+      if (reverseLearning != null) 'reverse_learning': reverseLearning,
+      if (reverseLastReview != null) 'reverse_last_review': reverseLastReview,
+      if (reverseIntervalSeconds != null)
+        'reverse_interval_seconds': reverseIntervalSeconds,
+      if (reverseDifficulty != null) 'reverse_difficulty': reverseDifficulty,
+      if (reverseQueuedAt != null) 'reverse_queued_at': reverseQueuedAt,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -867,6 +1183,11 @@ class CardsCompanion extends UpdateCompanion<CardRow> {
     Value<int>? intervalSeconds,
     Value<double>? difficulty,
     Value<DateTime>? createdAt,
+    Value<bool>? reverseLearning,
+    Value<DateTime?>? reverseLastReview,
+    Value<int?>? reverseIntervalSeconds,
+    Value<double?>? reverseDifficulty,
+    Value<DateTime?>? reverseQueuedAt,
     Value<int>? rowid,
   }) {
     return CardsCompanion(
@@ -879,6 +1200,12 @@ class CardsCompanion extends UpdateCompanion<CardRow> {
       intervalSeconds: intervalSeconds ?? this.intervalSeconds,
       difficulty: difficulty ?? this.difficulty,
       createdAt: createdAt ?? this.createdAt,
+      reverseLearning: reverseLearning ?? this.reverseLearning,
+      reverseLastReview: reverseLastReview ?? this.reverseLastReview,
+      reverseIntervalSeconds:
+          reverseIntervalSeconds ?? this.reverseIntervalSeconds,
+      reverseDifficulty: reverseDifficulty ?? this.reverseDifficulty,
+      reverseQueuedAt: reverseQueuedAt ?? this.reverseQueuedAt,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -913,6 +1240,23 @@ class CardsCompanion extends UpdateCompanion<CardRow> {
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
     }
+    if (reverseLearning.present) {
+      map['reverse_learning'] = Variable<bool>(reverseLearning.value);
+    }
+    if (reverseLastReview.present) {
+      map['reverse_last_review'] = Variable<DateTime>(reverseLastReview.value);
+    }
+    if (reverseIntervalSeconds.present) {
+      map['reverse_interval_seconds'] = Variable<int>(
+        reverseIntervalSeconds.value,
+      );
+    }
+    if (reverseDifficulty.present) {
+      map['reverse_difficulty'] = Variable<double>(reverseDifficulty.value);
+    }
+    if (reverseQueuedAt.present) {
+      map['reverse_queued_at'] = Variable<DateTime>(reverseQueuedAt.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -931,6 +1275,11 @@ class CardsCompanion extends UpdateCompanion<CardRow> {
           ..write('intervalSeconds: $intervalSeconds, ')
           ..write('difficulty: $difficulty, ')
           ..write('createdAt: $createdAt, ')
+          ..write('reverseLearning: $reverseLearning, ')
+          ..write('reverseLastReview: $reverseLastReview, ')
+          ..write('reverseIntervalSeconds: $reverseIntervalSeconds, ')
+          ..write('reverseDifficulty: $reverseDifficulty, ')
+          ..write('reverseQueuedAt: $reverseQueuedAt, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -1073,6 +1422,18 @@ class $ReviewsTable extends Reviews with TableInfo<$ReviewsTable, ReviewRow> {
         type: DriftSqlType.dateTime,
         requiredDuringInsert: false,
       );
+  static const VerificationMeta _directionMeta = const VerificationMeta(
+    'direction',
+  );
+  @override
+  late final GeneratedColumn<String> direction = GeneratedColumn<String>(
+    'direction',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('forward'),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -1086,6 +1447,7 @@ class $ReviewsTable extends Reviews with TableInfo<$ReviewsTable, ReviewRow> {
     learningBefore,
     learningAfter,
     lastReviewBefore,
+    direction,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -1201,6 +1563,12 @@ class $ReviewsTable extends Reviews with TableInfo<$ReviewsTable, ReviewRow> {
         ),
       );
     }
+    if (data.containsKey('direction')) {
+      context.handle(
+        _directionMeta,
+        direction.isAcceptableOrUnknown(data['direction']!, _directionMeta),
+      );
+    }
     return context;
   }
 
@@ -1254,6 +1622,10 @@ class $ReviewsTable extends Reviews with TableInfo<$ReviewsTable, ReviewRow> {
         DriftSqlType.dateTime,
         data['${effectivePrefix}last_review_before'],
       ),
+      direction: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}direction'],
+      )!,
     );
   }
 
@@ -1278,6 +1650,9 @@ class ReviewRow extends DataClass implements Insertable<ReviewRow> {
   /// Not part of the grade arithmetic. Stored so a persisted undo can put
   /// [FlashCard.lastReview] back.
   final DateTime? lastReviewBefore;
+
+  /// `forward` or `reverse`. Undo shows this face again.
+  final String direction;
   const ReviewRow({
     required this.id,
     required this.cardId,
@@ -1290,6 +1665,7 @@ class ReviewRow extends DataClass implements Insertable<ReviewRow> {
     required this.learningBefore,
     required this.learningAfter,
     this.lastReviewBefore,
+    required this.direction,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -1307,6 +1683,7 @@ class ReviewRow extends DataClass implements Insertable<ReviewRow> {
     if (!nullToAbsent || lastReviewBefore != null) {
       map['last_review_before'] = Variable<DateTime>(lastReviewBefore);
     }
+    map['direction'] = Variable<String>(direction);
     return map;
   }
 
@@ -1325,6 +1702,7 @@ class ReviewRow extends DataClass implements Insertable<ReviewRow> {
       lastReviewBefore: lastReviewBefore == null && nullToAbsent
           ? const Value.absent()
           : Value(lastReviewBefore),
+      direction: Value(direction),
     );
   }
 
@@ -1347,6 +1725,7 @@ class ReviewRow extends DataClass implements Insertable<ReviewRow> {
       lastReviewBefore: serializer.fromJson<DateTime?>(
         json['lastReviewBefore'],
       ),
+      direction: serializer.fromJson<String>(json['direction']),
     );
   }
   @override
@@ -1364,6 +1743,7 @@ class ReviewRow extends DataClass implements Insertable<ReviewRow> {
       'learningBefore': serializer.toJson<bool>(learningBefore),
       'learningAfter': serializer.toJson<bool>(learningAfter),
       'lastReviewBefore': serializer.toJson<DateTime?>(lastReviewBefore),
+      'direction': serializer.toJson<String>(direction),
     };
   }
 
@@ -1379,6 +1759,7 @@ class ReviewRow extends DataClass implements Insertable<ReviewRow> {
     bool? learningBefore,
     bool? learningAfter,
     Value<DateTime?> lastReviewBefore = const Value.absent(),
+    String? direction,
   }) => ReviewRow(
     id: id ?? this.id,
     cardId: cardId ?? this.cardId,
@@ -1393,6 +1774,7 @@ class ReviewRow extends DataClass implements Insertable<ReviewRow> {
     lastReviewBefore: lastReviewBefore.present
         ? lastReviewBefore.value
         : this.lastReviewBefore,
+    direction: direction ?? this.direction,
   );
   ReviewRow copyWithCompanion(ReviewsCompanion data) {
     return ReviewRow(
@@ -1423,6 +1805,7 @@ class ReviewRow extends DataClass implements Insertable<ReviewRow> {
       lastReviewBefore: data.lastReviewBefore.present
           ? data.lastReviewBefore.value
           : this.lastReviewBefore,
+      direction: data.direction.present ? data.direction.value : this.direction,
     );
   }
 
@@ -1439,7 +1822,8 @@ class ReviewRow extends DataClass implements Insertable<ReviewRow> {
           ..write('difficultyAfter: $difficultyAfter, ')
           ..write('learningBefore: $learningBefore, ')
           ..write('learningAfter: $learningAfter, ')
-          ..write('lastReviewBefore: $lastReviewBefore')
+          ..write('lastReviewBefore: $lastReviewBefore, ')
+          ..write('direction: $direction')
           ..write(')'))
         .toString();
   }
@@ -1457,6 +1841,7 @@ class ReviewRow extends DataClass implements Insertable<ReviewRow> {
     learningBefore,
     learningAfter,
     lastReviewBefore,
+    direction,
   );
   @override
   bool operator ==(Object other) =>
@@ -1472,7 +1857,8 @@ class ReviewRow extends DataClass implements Insertable<ReviewRow> {
           other.difficultyAfter == this.difficultyAfter &&
           other.learningBefore == this.learningBefore &&
           other.learningAfter == this.learningAfter &&
-          other.lastReviewBefore == this.lastReviewBefore);
+          other.lastReviewBefore == this.lastReviewBefore &&
+          other.direction == this.direction);
 }
 
 class ReviewsCompanion extends UpdateCompanion<ReviewRow> {
@@ -1487,6 +1873,7 @@ class ReviewsCompanion extends UpdateCompanion<ReviewRow> {
   final Value<bool> learningBefore;
   final Value<bool> learningAfter;
   final Value<DateTime?> lastReviewBefore;
+  final Value<String> direction;
   const ReviewsCompanion({
     this.id = const Value.absent(),
     this.cardId = const Value.absent(),
@@ -1499,6 +1886,7 @@ class ReviewsCompanion extends UpdateCompanion<ReviewRow> {
     this.learningBefore = const Value.absent(),
     this.learningAfter = const Value.absent(),
     this.lastReviewBefore = const Value.absent(),
+    this.direction = const Value.absent(),
   });
   ReviewsCompanion.insert({
     this.id = const Value.absent(),
@@ -1512,6 +1900,7 @@ class ReviewsCompanion extends UpdateCompanion<ReviewRow> {
     required bool learningBefore,
     required bool learningAfter,
     this.lastReviewBefore = const Value.absent(),
+    this.direction = const Value.absent(),
   }) : cardId = Value(cardId),
        reviewedAt = Value(reviewedAt),
        outcome = Value(outcome),
@@ -1533,6 +1922,7 @@ class ReviewsCompanion extends UpdateCompanion<ReviewRow> {
     Expression<bool>? learningBefore,
     Expression<bool>? learningAfter,
     Expression<DateTime>? lastReviewBefore,
+    Expression<String>? direction,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
@@ -1546,6 +1936,7 @@ class ReviewsCompanion extends UpdateCompanion<ReviewRow> {
       if (learningBefore != null) 'learning_before': learningBefore,
       if (learningAfter != null) 'learning_after': learningAfter,
       if (lastReviewBefore != null) 'last_review_before': lastReviewBefore,
+      if (direction != null) 'direction': direction,
     });
   }
 
@@ -1561,6 +1952,7 @@ class ReviewsCompanion extends UpdateCompanion<ReviewRow> {
     Value<bool>? learningBefore,
     Value<bool>? learningAfter,
     Value<DateTime?>? lastReviewBefore,
+    Value<String>? direction,
   }) {
     return ReviewsCompanion(
       id: id ?? this.id,
@@ -1574,6 +1966,7 @@ class ReviewsCompanion extends UpdateCompanion<ReviewRow> {
       learningBefore: learningBefore ?? this.learningBefore,
       learningAfter: learningAfter ?? this.learningAfter,
       lastReviewBefore: lastReviewBefore ?? this.lastReviewBefore,
+      direction: direction ?? this.direction,
     );
   }
 
@@ -1613,6 +2006,9 @@ class ReviewsCompanion extends UpdateCompanion<ReviewRow> {
     if (lastReviewBefore.present) {
       map['last_review_before'] = Variable<DateTime>(lastReviewBefore.value);
     }
+    if (direction.present) {
+      map['direction'] = Variable<String>(direction.value);
+    }
     return map;
   }
 
@@ -1629,7 +2025,8 @@ class ReviewsCompanion extends UpdateCompanion<ReviewRow> {
           ..write('difficultyAfter: $difficultyAfter, ')
           ..write('learningBefore: $learningBefore, ')
           ..write('learningAfter: $learningAfter, ')
-          ..write('lastReviewBefore: $lastReviewBefore')
+          ..write('lastReviewBefore: $lastReviewBefore, ')
+          ..write('direction: $direction')
           ..write(')'))
         .toString();
   }
@@ -2107,6 +2504,7 @@ typedef $$TopicsTableCreateCompanionBuilder =
       required String name,
       required int position,
       required DateTime createdAt,
+      Value<bool> reverseDrill,
       Value<int> rowid,
     });
 typedef $$TopicsTableUpdateCompanionBuilder =
@@ -2116,6 +2514,7 @@ typedef $$TopicsTableUpdateCompanionBuilder =
       Value<String> name,
       Value<int> position,
       Value<DateTime> createdAt,
+      Value<bool> reverseDrill,
       Value<int> rowid,
     });
 
@@ -2186,6 +2585,11 @@ class $$TopicsTableFilterComposer
 
   ColumnFilters<DateTime> get createdAt => $composableBuilder(
     column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get reverseDrill => $composableBuilder(
+    column: $table.reverseDrill,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -2267,6 +2671,11 @@ class $$TopicsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<bool> get reverseDrill => $composableBuilder(
+    column: $table.reverseDrill,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$TopicsTableOrderingComposer get parentId {
     final $$TopicsTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -2311,6 +2720,11 @@ class $$TopicsTableAnnotationComposer
 
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<bool> get reverseDrill => $composableBuilder(
+    column: $table.reverseDrill,
+    builder: (column) => column,
+  );
 
   $$TopicsTableAnnotationComposer get parentId {
     final $$TopicsTableAnnotationComposer composer = $composerBuilder(
@@ -2394,6 +2808,7 @@ class $$TopicsTableTableManager
                 Value<String> name = const Value.absent(),
                 Value<int> position = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
+                Value<bool> reverseDrill = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TopicsCompanion(
                 id: id,
@@ -2401,6 +2816,7 @@ class $$TopicsTableTableManager
                 name: name,
                 position: position,
                 createdAt: createdAt,
+                reverseDrill: reverseDrill,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -2410,6 +2826,7 @@ class $$TopicsTableTableManager
                 required String name,
                 required int position,
                 required DateTime createdAt,
+                Value<bool> reverseDrill = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TopicsCompanion.insert(
                 id: id,
@@ -2417,6 +2834,7 @@ class $$TopicsTableTableManager
                 name: name,
                 position: position,
                 createdAt: createdAt,
+                reverseDrill: reverseDrill,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
@@ -2508,6 +2926,11 @@ typedef $$CardsTableCreateCompanionBuilder =
       required int intervalSeconds,
       required double difficulty,
       required DateTime createdAt,
+      Value<bool> reverseLearning,
+      Value<DateTime?> reverseLastReview,
+      Value<int?> reverseIntervalSeconds,
+      Value<double?> reverseDifficulty,
+      Value<DateTime?> reverseQueuedAt,
       Value<int> rowid,
     });
 typedef $$CardsTableUpdateCompanionBuilder =
@@ -2521,6 +2944,11 @@ typedef $$CardsTableUpdateCompanionBuilder =
       Value<int> intervalSeconds,
       Value<double> difficulty,
       Value<DateTime> createdAt,
+      Value<bool> reverseLearning,
+      Value<DateTime?> reverseLastReview,
+      Value<int?> reverseIntervalSeconds,
+      Value<double?> reverseDifficulty,
+      Value<DateTime?> reverseQueuedAt,
       Value<int> rowid,
     });
 
@@ -2611,6 +3039,31 @@ class $$CardsTableFilterComposer
 
   ColumnFilters<DateTime> get createdAt => $composableBuilder(
     column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get reverseLearning => $composableBuilder(
+    column: $table.reverseLearning,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get reverseLastReview => $composableBuilder(
+    column: $table.reverseLastReview,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get reverseIntervalSeconds => $composableBuilder(
+    column: $table.reverseIntervalSeconds,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<double> get reverseDifficulty => $composableBuilder(
+    column: $table.reverseDifficulty,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get reverseQueuedAt => $composableBuilder(
+    column: $table.reverseQueuedAt,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -2712,6 +3165,31 @@ class $$CardsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<bool> get reverseLearning => $composableBuilder(
+    column: $table.reverseLearning,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get reverseLastReview => $composableBuilder(
+    column: $table.reverseLastReview,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get reverseIntervalSeconds => $composableBuilder(
+    column: $table.reverseIntervalSeconds,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<double> get reverseDifficulty => $composableBuilder(
+    column: $table.reverseDifficulty,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get reverseQueuedAt => $composableBuilder(
+    column: $table.reverseQueuedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$TopicsTableOrderingComposer get topicId {
     final $$TopicsTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -2774,6 +3252,31 @@ class $$CardsTableAnnotationComposer
 
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<bool> get reverseLearning => $composableBuilder(
+    column: $table.reverseLearning,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get reverseLastReview => $composableBuilder(
+    column: $table.reverseLastReview,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get reverseIntervalSeconds => $composableBuilder(
+    column: $table.reverseIntervalSeconds,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<double> get reverseDifficulty => $composableBuilder(
+    column: $table.reverseDifficulty,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get reverseQueuedAt => $composableBuilder(
+    column: $table.reverseQueuedAt,
+    builder: (column) => column,
+  );
 
   $$TopicsTableAnnotationComposer get topicId {
     final $$TopicsTableAnnotationComposer composer = $composerBuilder(
@@ -2861,6 +3364,11 @@ class $$CardsTableTableManager
                 Value<int> intervalSeconds = const Value.absent(),
                 Value<double> difficulty = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
+                Value<bool> reverseLearning = const Value.absent(),
+                Value<DateTime?> reverseLastReview = const Value.absent(),
+                Value<int?> reverseIntervalSeconds = const Value.absent(),
+                Value<double?> reverseDifficulty = const Value.absent(),
+                Value<DateTime?> reverseQueuedAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => CardsCompanion(
                 id: id,
@@ -2872,6 +3380,11 @@ class $$CardsTableTableManager
                 intervalSeconds: intervalSeconds,
                 difficulty: difficulty,
                 createdAt: createdAt,
+                reverseLearning: reverseLearning,
+                reverseLastReview: reverseLastReview,
+                reverseIntervalSeconds: reverseIntervalSeconds,
+                reverseDifficulty: reverseDifficulty,
+                reverseQueuedAt: reverseQueuedAt,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -2885,6 +3398,11 @@ class $$CardsTableTableManager
                 required int intervalSeconds,
                 required double difficulty,
                 required DateTime createdAt,
+                Value<bool> reverseLearning = const Value.absent(),
+                Value<DateTime?> reverseLastReview = const Value.absent(),
+                Value<int?> reverseIntervalSeconds = const Value.absent(),
+                Value<double?> reverseDifficulty = const Value.absent(),
+                Value<DateTime?> reverseQueuedAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => CardsCompanion.insert(
                 id: id,
@@ -2896,6 +3414,11 @@ class $$CardsTableTableManager
                 intervalSeconds: intervalSeconds,
                 difficulty: difficulty,
                 createdAt: createdAt,
+                reverseLearning: reverseLearning,
+                reverseLastReview: reverseLastReview,
+                reverseIntervalSeconds: reverseIntervalSeconds,
+                reverseDifficulty: reverseDifficulty,
+                reverseQueuedAt: reverseQueuedAt,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
@@ -2989,6 +3512,7 @@ typedef $$ReviewsTableCreateCompanionBuilder =
       required bool learningBefore,
       required bool learningAfter,
       Value<DateTime?> lastReviewBefore,
+      Value<String> direction,
     });
 typedef $$ReviewsTableUpdateCompanionBuilder =
     ReviewsCompanion Function({
@@ -3003,6 +3527,7 @@ typedef $$ReviewsTableUpdateCompanionBuilder =
       Value<bool> learningBefore,
       Value<bool> learningAfter,
       Value<DateTime?> lastReviewBefore,
+      Value<String> direction,
     });
 
 final class $$ReviewsTableReferences
@@ -3084,6 +3609,11 @@ class $$ReviewsTableFilterComposer
 
   ColumnFilters<DateTime> get lastReviewBefore => $composableBuilder(
     column: $table.lastReviewBefore,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get direction => $composableBuilder(
+    column: $table.direction,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -3170,6 +3700,11 @@ class $$ReviewsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get direction => $composableBuilder(
+    column: $table.direction,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$CardsTableOrderingComposer get cardId {
     final $$CardsTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -3249,6 +3784,9 @@ class $$ReviewsTableAnnotationComposer
     builder: (column) => column,
   );
 
+  GeneratedColumn<String> get direction =>
+      $composableBuilder(column: $table.direction, builder: (column) => column);
+
   $$CardsTableAnnotationComposer get cardId {
     final $$CardsTableAnnotationComposer composer = $composerBuilder(
       composer: this,
@@ -3312,6 +3850,7 @@ class $$ReviewsTableTableManager
                 Value<bool> learningBefore = const Value.absent(),
                 Value<bool> learningAfter = const Value.absent(),
                 Value<DateTime?> lastReviewBefore = const Value.absent(),
+                Value<String> direction = const Value.absent(),
               }) => ReviewsCompanion(
                 id: id,
                 cardId: cardId,
@@ -3324,6 +3863,7 @@ class $$ReviewsTableTableManager
                 learningBefore: learningBefore,
                 learningAfter: learningAfter,
                 lastReviewBefore: lastReviewBefore,
+                direction: direction,
               ),
           createCompanionCallback:
               ({
@@ -3338,6 +3878,7 @@ class $$ReviewsTableTableManager
                 required bool learningBefore,
                 required bool learningAfter,
                 Value<DateTime?> lastReviewBefore = const Value.absent(),
+                Value<String> direction = const Value.absent(),
               }) => ReviewsCompanion.insert(
                 id: id,
                 cardId: cardId,
@@ -3350,6 +3891,7 @@ class $$ReviewsTableTableManager
                 learningBefore: learningBefore,
                 learningAfter: learningAfter,
                 lastReviewBefore: lastReviewBefore,
+                direction: direction,
               ),
           withReferenceMapper: (p0) => p0
               .map(

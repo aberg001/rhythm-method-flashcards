@@ -123,4 +123,60 @@ void main() {
       expect(library.learnedDue, 1);
     },
   );
+
+  test('a waiting reverse counts as new, and a dormant one does not', () {
+    final topics = [
+      const Topic(id: 'on', name: 'On', reverseDrill: true),
+      const Topic(id: 'off', name: 'Off'),
+    ];
+    final waiting = spawnReverseFace(
+      FlashCard(
+        id: 'known',
+        topicId: 'on',
+        front: 'front',
+        back: 'back',
+        learning: false,
+        lastReview: now,
+        intervalSeconds: 7200,
+        difficulty: 1,
+        createdAt: DateTime.utc(2026, 1, 1),
+      ),
+      queuedAt: now,
+    );
+    final dormant = spawnReverseFace(
+      FlashCard(
+        id: 'drilling',
+        topicId: 'on',
+        front: 'front',
+        back: 'back',
+        learning: true,
+        lastReview: now,
+        intervalSeconds: 600,
+        difficulty: 1,
+        createdAt: DateTime.utc(2026, 1, 2),
+      ),
+      queuedAt: now,
+    );
+    final hidden = spawnReverseFace(
+      FlashCard.fresh(
+        id: 'hidden',
+        topicId: 'off',
+        front: 'front',
+        back: 'back',
+        createdAt: DateTime.utc(2026, 1, 3),
+      ),
+      queuedAt: now,
+    ).copyWith(reverseLearning: true, reverseLastReview: now);
+
+    final counts = countStudy(
+      topics: topics,
+      cards: [waiting, dormant, hidden],
+      scopeTopicId: null,
+      now: now,
+      parameters: parameters,
+    );
+    expect(counts.learning, 1);
+    expect(counts.newWaiting, 2);
+    expect(counts.learnedDue, 0);
+  });
 }
