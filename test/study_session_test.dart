@@ -677,6 +677,92 @@ void main() {
     },
   );
 
+  testWidgets(
+    'a tag filter keeps a matching card in a subtopic and drops the rest',
+    (tester) async {
+      await insertTopic(repository, 'parent');
+      await insertTopic(repository, 'child', parentId: 'parent');
+      await repository.insertTag(id: 'verb', name: 'Verb');
+      await repository.insertCard(
+        FlashCard.fresh(
+          id: 'parent-card',
+          topicId: 'parent',
+          front: 'parent-front',
+          back: 'parent-back',
+          createdAt: DateTime.utc(2026, 1, 1),
+        ),
+      );
+      await repository.insertCard(
+        FlashCard.fresh(
+          id: 'child-card',
+          topicId: 'child',
+          front: 'child-front',
+          back: 'child-back',
+          createdAt: DateTime.utc(2026, 2, 1),
+        ),
+      );
+      await repository.setCardTags('child-card', {'verb'});
+
+      await pumpSession(
+        tester,
+        repository,
+        title: 'Parent',
+        scopeTopicId: 'parent',
+        draw: neverDraw,
+      );
+      expect(faceText('parent-front'), findsOneWidget);
+      expect(faceText('child-front'), findsNothing);
+
+      await pumpSession(
+        tester,
+        repository,
+        title: 'Verb',
+        scopeTopicId: 'parent',
+        tagIds: {'verb'},
+        draw: neverDraw,
+      );
+      expect(faceText('child-front'), findsOneWidget);
+      expect(faceText('parent-front'), findsNothing);
+    },
+  );
+
+  testWidgets('a whole-library tag filter leaves untagged cards out', (
+    tester,
+  ) async {
+    await insertTopic(repository, 'parent');
+    await insertTopic(repository, 'child', parentId: 'parent');
+    await repository.insertTag(id: 'verb', name: 'Verb');
+    await repository.insertCard(
+      FlashCard.fresh(
+        id: 'parent-card',
+        topicId: 'parent',
+        front: 'parent-front',
+        back: 'parent-back',
+        createdAt: DateTime.utc(2026, 1, 1),
+      ),
+    );
+    await repository.insertCard(
+      FlashCard.fresh(
+        id: 'child-card',
+        topicId: 'child',
+        front: 'child-front',
+        back: 'child-back',
+        createdAt: DateTime.utc(2026, 2, 1),
+      ),
+    );
+    await repository.setCardTags('child-card', {'verb'});
+
+    await pumpSession(
+      tester,
+      repository,
+      title: 'Verb',
+      tagIds: {'verb'},
+      draw: neverDraw,
+    );
+    expect(faceText('child-front'), findsOneWidget);
+    expect(find.text('parent-front'), findsNothing);
+  });
+
   testWidgets('edit changes the front and keeps the schedule and the flip', (
     tester,
   ) async {
@@ -797,6 +883,8 @@ Future<void> pumpSession(
   LibraryRepository repository, {
   required String title,
   String? scopeTopicId,
+  Set<String>? tagIds,
+  bool untagged = false,
   DateTime Function()? now,
   WeightDraw? draw,
 }) async {
@@ -812,6 +900,8 @@ Future<void> pumpSession(
           key: UniqueKey(),
           title: title,
           scopeTopicId: scopeTopicId,
+          tagIds: tagIds,
+          untagged: untagged,
           now: now,
           draw: draw,
         ),

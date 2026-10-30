@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../domain/scheduler.dart';
+import '../domain/tag.dart';
 import 'database.dart';
 import 'library_backup.dart';
 
@@ -236,7 +237,118 @@ class LibraryRepository {
     });
   }
 
-  /// Topics, cards, and settings as version 2 JSON. Review rows are omitted.
+  Future<List<Tag>> listTags() async {
+    final rows =
+        await (_db.select(_db.tags)..orderBy([
+              (tag) => OrderingTerm(expression: tag.position),
+              (tag) => OrderingTerm(expression: tag.id),
+            ]))
+            .get();
+    return [
+      for (final row in rows)
+        Tag(id: row.id, name: row.name, position: row.position),
+    ];
+  }
+
+  /// Tag ids for each card, ordered by tag position.
+  Future<Map<String, List<String>>> cardTagIds() async {
+    final tags = await listTags();
+    final rows = await _db.select(_db.cardTags).get();
+    final byCard = <String, List<String>>{};
+    for (final tag in tags) {
+      for (final row in rows) {
+        if (row.tagId != tag.id) continue;
+        byCard.putIfAbsent(row.cardId, () => []).add(tag.id);
+      }
+    }
+    return byCard;
+  }
+
+  Future<List<String>> tagIdsFor(String cardId) async {
+    final links = await cardTagIds();
+    return links[cardId] ?? const [];
+  }
+
+  /// Stores the trimmed spelling. Rejects a blank name and a name that
+  /// matches another tag after trimming, ignoring case.
+  Future<void> insertTag({required String id, required String name}) {
+    return _db.transaction(() async {
+      final existing = await listTags();
+      final stored = _checkedTagName(name, existing);
+      final position = existing.isEmpty
+          ? 0
+          : existing
+                    .map((tag) => tag.position)
+                    .reduce((a, b) => a > b ? a : b) +
+                1;
+      await _db
+          .into(_db.tags)
+          .insert(
+            TagsCompanion.insert(id: id, name: stored, position: position),
+          );
+    });
+  }
+
+  Future<void> renameTag(String id, String name) {
+    return _db.transaction(() async {
+      final existing = await listTags();
+      if (!existing.any((tag) => tag.id == id)) {
+        throw StateError('Tag $id does not exist');
+      }
+      final stored = _checkedTagName(name, existing, exceptId: id);
+      await (_db.update(_db.tags)..where((tag) => tag.id.equals(id))).write(
+        TagsCompanion(name: Value(stored)),
+      );
+    });
+  }
+
+  /// Removes the tag and its links. Cards stay.
+  Future<void> deleteTag(String id) async {
+    final removed = await (_db.delete(
+      _db.tags,
+    )..where((tag) => tag.id.equals(id))).go();
+    if (removed == 0) {
+      throw StateError('Tag $id does not exist');
+    }
+  }
+
+  Future<void> reorderTags(List<String> orderedIds) {
+    return _db.transaction(() async {
+      for (var index = 0; index < orderedIds.length; index++) {
+        await (_db.update(_db.tags)
+              ..where((tag) => tag.id.equals(orderedIds[index])))
+            .write(TagsCompanion(position: Value(index)));
+      }
+    });
+  }
+
+  /// Replaces the tags on one card. Unknown tag ids are rejected.
+  Future<void> setCardTags(String cardId, Set<String> tagIds) {
+    return _db.transaction(() async {
+      final card = await (_db.select(
+        _db.cards,
+      )..where((row) => row.id.equals(cardId))).getSingleOrNull();
+      if (card == null) {
+        throw StateError('Card $cardId does not exist');
+      }
+      final known = {for (final tag in await listTags()) tag.id};
+      for (final tagId in tagIds) {
+        if (!known.contains(tagId)) {
+          throw StateError('Tag $tagId does not exist');
+        }
+      }
+      await (_db.delete(
+        _db.cardTags,
+      )..where((row) => row.cardId.equals(cardId))).go();
+      for (final tagId in tagIds) {
+        await _db
+            .into(_db.cardTags)
+            .insert(CardTagsCompanion.insert(cardId: cardId, tagId: tagId));
+      }
+    });
+  }
+
+  /// Topics, cards, tags, and settings as version 3 JSON. Review rows are omitted.
   ///
   /// Topic creation times come from the stored rows. The domain [Topic] does
   /// not carry them, and a later import needs them to keep new-card order.
@@ -258,9 +370,15 @@ class LibraryRepository {
           reverseDrill: row.reverseDrill,
         ),
     ];
+    final tags = await listTags();
     return libraryBackupJson(
       topics: topics,
+      tags: [
+        for (final tag in tags)
+          BackupTag(id: tag.id, name: tag.name, position: tag.position),
+      ],
       cards: await listCards(),
+      cardTagIds: await cardTagIds(),
       settings: await loadSettings(),
     );
   }
@@ -274,7 +392,9 @@ class LibraryRepository {
     backup.settings.validate();
     return _db.transaction(() async {
       await _db.delete(_db.reviews).go();
+      await _db.delete(_db.cardTags).go();
       await _db.delete(_db.cards).go();
+      await _db.delete(_db.tags).go();
       await _db
           .update(_db.topics)
           .write(const TopicsCompanion(parentId: Value(null)));
@@ -306,8 +426,29 @@ class LibraryRepository {
         inserted.add(topic.id);
       }
 
+      for (final tag in backup.tags) {
+        await _db
+            .into(_db.tags)
+            .insert(
+              TagsCompanion.insert(
+                id: tag.id,
+                name: tag.name,
+                position: tag.position,
+              ),
+            );
+      }
+
       for (final card in backup.cards) {
         await _db.into(_db.cards).insert(_cardCompanion(card));
+      }
+      for (final entry in backup.cardTagIds.entries) {
+        for (final tagId in entry.value) {
+          await _db
+              .into(_db.cardTags)
+              .insert(
+                CardTagsCompanion.insert(cardId: entry.key, tagId: tagId),
+              );
+        }
       }
       await _db
           .update(_db.settings)
@@ -540,6 +681,20 @@ FlashCard _spawnMissingReverse(
     return queueReverseBackfill([card], ceiling: ceiling).single;
   }
   return queueDormantReverses([card], behind: ceiling).single;
+}
+
+String _checkedTagName(String name, List<Tag> existing, {String? exceptId}) {
+  final stored = canonicalTagName(name);
+  if (stored.isEmpty) {
+    throw StateError('Tag name is blank');
+  }
+  for (final tag in existing) {
+    if (tag.id == exceptId) continue;
+    if (tagNamesMatch(tag.name, stored)) {
+      throw StateError('Tag ${tag.name} already exists');
+    }
+  }
+  return stored;
 }
 
 Topic _topic(TopicRow row) {

@@ -116,6 +116,8 @@ Worked lapse. A learned card with a 4 hour interval is answered wrong. The inter
 
 `select(scope, now, draw)` returns a face or "session clear". With the reverse drill off, each card is one face and the steps below are unchanged. [Reverse faces](#reverse-faces) says which faces are in the draw. Recency comes from that face's `last_review`, so it survives leaving the app. There is no separate "last three cards" list.
 
+A tag filter is applied before these steps. The session is given only the cards that match, and the window counts faces of those cards. Untagged is its own filter and is not combined with named tags. Studying the whole library passes every card. Tags are not a scheduler setting, and they do not change a grade.
+
 Weights are integers. `draw` returns an integer uniformly in `0 .. total - 1` for a caller-supplied total. Tests inject that integer. Production uses a uniform source. A weight of 0 is never chosen while the total is positive: walk candidates in order and take the first whose cumulative weight is greater than the draw.
 
 1. **Due learned cards.** Take in-scope cards that are learned and due. If any exist, return the one with the greatest overdue ratio. Break ties by larger absolute lateness `(now - (last_review + interval))`, then by older `created_at`, then by `id` ascending. Do not consult the window or the new-card pile when this set is non-empty. Priority 1 is absolute. A card just graded is not due, because its interval is at least `I_min`.

@@ -68,6 +68,27 @@ class Reviews extends Table {
   TextColumn get direction => text().withDefault(const Constant('forward'))();
 }
 
+@DataClassName('TagRow')
+class Tags extends Table {
+  TextColumn get id => text()();
+  TextColumn get name => text()();
+  IntColumn get position => integer()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+@DataClassName('CardTagRow')
+class CardTags extends Table {
+  TextColumn get cardId =>
+      text().references(Cards, #id, onDelete: KeyAction.cascade)();
+  TextColumn get tagId =>
+      text().references(Tags, #id, onDelete: KeyAction.cascade)();
+
+  @override
+  Set<Column> get primaryKey => {cardId, tagId};
+}
+
 @DataClassName('SettingRow')
 class Settings extends Table {
   IntColumn get id => integer()();
@@ -81,12 +102,12 @@ class Settings extends Table {
   Set<Column> get primaryKey => {id};
 }
 
-@DriftDatabase(tables: [Topics, Cards, Reviews, Settings])
+@DriftDatabase(tables: [Topics, Cards, Reviews, Settings, Tags, CardTags])
 class LibraryDatabase extends _$LibraryDatabase {
   LibraryDatabase(super.executor);
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -99,6 +120,10 @@ class LibraryDatabase extends _$LibraryDatabase {
         await migrator.addColumn(cards, cards.reverseDifficulty);
         await migrator.addColumn(cards, cards.reverseQueuedAt);
         await migrator.addColumn(reviews, reviews.direction);
+      }
+      if (from < 3) {
+        await migrator.createTable(tags);
+        await migrator.createTable(cardTags);
       }
     },
     beforeOpen: (details) async {

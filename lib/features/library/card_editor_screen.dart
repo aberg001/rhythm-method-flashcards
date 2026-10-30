@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../domain/scheduler.dart';
+import '../../domain/tag.dart';
 import 'ids.dart';
 import 'library_scope.dart';
 import 'name_dialog.dart';
@@ -19,6 +20,9 @@ class CardEditorScreen extends StatefulWidget {
 class _CardEditorScreenState extends State<CardEditorScreen> {
   late final TextEditingController _front;
   late final TextEditingController _back;
+  List<Tag> _tags = [];
+  Set<String> _selected = {};
+  var _tagsLoaded = false;
   var _busy = false;
 
   bool get _editing => widget.card != null;
@@ -28,6 +32,24 @@ class _CardEditorScreenState extends State<CardEditorScreen> {
     super.initState();
     _front = TextEditingController(text: widget.card?.front ?? '');
     _back = TextEditingController(text: widget.card?.back ?? '');
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _loadTags();
+    });
+  }
+
+  Future<void> _loadTags() async {
+    if (_tagsLoaded) return;
+    final repository = LibraryScope.of(context);
+    final tags = await repository.listTags();
+    final selected = widget.card == null
+        ? <String>{}
+        : (await repository.tagIdsFor(widget.card!.id)).toSet();
+    if (!mounted) return;
+    setState(() {
+      _tags = tags;
+      _selected = selected;
+      _tagsLoaded = true;
+    });
   }
 
   @override
@@ -48,12 +70,15 @@ class _CardEditorScreenState extends State<CardEditorScreen> {
       return;
     }
     setState(() => _busy = true);
+    if (!_tagsLoaded) await _loadTags();
+    if (!mounted) return;
     final repository = LibraryScope.of(context);
     final existing = widget.card;
+    final id = existing?.id ?? newId();
     if (existing == null) {
       await repository.insertCard(
         FlashCard.fresh(
-          id: newId(),
+          id: id,
           topicId: widget.topicId,
           front: front,
           back: back,
@@ -61,8 +86,9 @@ class _CardEditorScreenState extends State<CardEditorScreen> {
         ),
       );
     } else {
-      await repository.updateCardContent(existing.id, front: front, back: back);
+      await repository.updateCardContent(id, front: front, back: back);
     }
+    await repository.setCardTags(id, _selected);
     if (!mounted) return;
     Navigator.of(context).pop();
   }
@@ -117,6 +143,34 @@ class _CardEditorScreenState extends State<CardEditorScreen> {
             minLines: 4,
             maxLines: 8,
           ),
+          if (_tags.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Text('Tags', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final tag in _tags)
+                  FilterChip(
+                    key: Key('card-tag-${tag.id}'),
+                    label: Text(tag.name),
+                    selected: _selected.contains(tag.id),
+                    onSelected: _busy
+                        ? null
+                        : (selected) {
+                            setState(() {
+                              if (selected) {
+                                _selected.add(tag.id);
+                              } else {
+                                _selected.remove(tag.id);
+                              }
+                            });
+                          },
+                  ),
+              ],
+            ),
+          ],
           if (_editing) ...[
             const SizedBox(height: 24),
             TextButton(

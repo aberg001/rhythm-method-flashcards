@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 // ignore: depend_on_referenced_packages
 import 'package:sqlite3/sqlite3.dart';
 import 'package:rhythm_method_flashcards/data/database.dart';
+import 'package:rhythm_method_flashcards/data/library_backup.dart';
 import 'package:rhythm_method_flashcards/data/library_repository.dart';
 import 'package:rhythm_method_flashcards/domain/scheduler.dart';
 
@@ -452,6 +453,50 @@ void main() {
     },
   );
 
+  test('tags keep their spelling, and deleting one leaves the card', () async {
+    await repository.insertTopic(id: 'spanish', name: 'Spanish');
+    await repository.insertCard(
+      FlashCard.fresh(
+        id: 'hola',
+        topicId: 'spanish',
+        front: 'hola',
+        back: 'hello',
+        createdAt: DateTime.utc(2026, 1, 1),
+      ),
+    );
+    await repository.insertTag(id: 'verb', name: ' Verb ');
+    await repository.insertTag(id: 'noun', name: 'Noun');
+    expect(
+      () => repository.insertTag(id: 'again', name: 'verb'),
+      throwsStateError,
+    );
+    expect(
+      () => repository.insertTag(id: 'blank', name: ' '),
+      throwsStateError,
+    );
+
+    await repository.renameTag('verb', 'Verbs');
+    expect((await repository.listTags()).map((tag) => tag.name), [
+      'Verbs',
+      'Noun',
+    ]);
+    await repository.reorderTags(['noun', 'verb']);
+    expect((await repository.listTags()).map((tag) => tag.id), [
+      'noun',
+      'verb',
+    ]);
+
+    await repository.setCardTags('hola', {'verb', 'noun'});
+    expect(await repository.tagIdsFor('hola'), ['noun', 'verb']);
+    await repository.deleteTag('verb');
+    expect(await repository.tagIdsFor('hola'), ['noun']);
+    expect((await repository.card('hola')).front, 'hola');
+
+    final restored = parseLibraryBackup(await repository.backupJson());
+    expect(restored.tags.single.name, 'Noun');
+    expect(restored.cardTagIds['hola'], ['noun']);
+  });
+
   test('a version 1 database keeps its rows and gains empty reverse columns', () async {
     await database.close();
     databaseClosed = true;
@@ -543,6 +588,7 @@ void main() {
     final review = (await migrated.reviewsFor('hola')).single;
     expect(review.record.face, StudyFace.forward);
     expect(review.record.outcome, GradeOutcome.wrong);
+    expect(await migrated.listTags(), isEmpty);
   });
 }
 

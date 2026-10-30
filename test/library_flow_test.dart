@@ -316,6 +316,60 @@ void main() {
       expect(find.text('hello'), findsNothing);
     });
 
+    testWidgets('a tag filter limits the list and the study session', (
+      tester,
+    ) async {
+      await pumpApp(tester, repository);
+      await addRootTopic(tester, 'Spanish', fromEmpty: true);
+
+      await tester.tap(find.byTooltip('Tags'));
+      await settle(tester);
+      await tester.tap(find.byTooltip('Add tag'));
+      await elapse(tester);
+      await enterName(tester, 'Verb');
+      await tester.tap(find.byTooltip('Add tag'));
+      await elapse(tester);
+      await enterName(tester, 'verb');
+      await settle(tester);
+      expect(find.text('Tag Verb already exists'), findsOneWidget);
+      await goBack(tester);
+
+      await openTopic(tester, 'Spanish');
+      await addCard(tester, 'hola', 'hello');
+      await addCard(tester, 'adios', 'goodbye');
+      await tester.tap(find.text('hola'));
+      await settle(tester);
+      await tester.tap(find.widgetWithText(FilterChip, 'Verb'));
+      await tester.tap(appBarText('Save'));
+      await settle(tester);
+
+      expect(find.text('hola'), findsOneWidget);
+      expect(find.text('adios'), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilterChip, 'Verb'));
+      await settle(tester);
+      expect(find.text('hola'), findsOneWidget);
+      expect(find.text('adios'), findsNothing);
+      expect(find.text('No cards match this filter.'), findsNothing);
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Study'));
+      await settle(tester);
+      final face = find.byKey(const Key('card-face'));
+      expect(
+        find.descendant(of: face, matching: find.text('hola')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: face, matching: find.text('adios')),
+        findsNothing,
+      );
+      await goBack(tester);
+
+      await tester.tap(find.widgetWithText(FilterChip, 'Untagged'));
+      await settle(tester);
+      expect(find.text('hola'), findsNothing);
+      expect(find.text('adios'), findsOneWidget);
+    });
+
     testWidgets(
       'reverse drill confirms for learned cards and does not pass to a subtopic',
       (tester) async {

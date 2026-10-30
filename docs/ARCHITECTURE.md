@@ -76,10 +76,11 @@ test/
 
 ## Storage
 
-SQLite through Drift, schema version 2. One file, `rhythm_method.sqlite`, in application support. Opening a version 1 file adds the reverse columns and leaves existing rows without a reverse face.
+SQLite through Drift, schema version 3. One file, `rhythm_method.sqlite`, in application support. Opening an older file adds the missing tables and columns. A version 1 file gains the reverse columns with no reverse faces. A file older than version 3 gains empty tag tables.
 
 - Topics: id, parent, name, position, created time, and the reverse-drill switch.
 - Cards: the forward schedule, plus a reverse face when its queue time is set. While a topic's reverse drill is on, every card in that topic has a face. A reverse whose front is not yet learned is stored and is not selected.
+- Tags: id, name, and position. A card and a tag meet in a join row. Deleting a tag or a card removes those rows. Deleting a tag leaves the card.
 - Reviews: one row per grade, including the direction and the before and after schedule of that face, so undo can restore it.
 - Settings: one row of the five parameters.
 
@@ -89,4 +90,4 @@ Generated database code is `lib/data/database.g.dart`. Drift stays on 2.31.0 so 
 
 Export writes topics, cards, and settings to `rhythm-method-backup.json` and hands it to the system share sheet. Review history is not in the file. Timestamps are UTC.
 
-Import parses the file before it touches the database. A file this app exported replaces the whole library. If the device already has a topic or a card, the user confirms first. Restoring clears review rows on the device. A file that does not parse leaves the library as it was. Export writes version 2, including the reverse switch and each card's reverse face. Import still accepts version 1, which comes in with the switch off and no reverse faces.
+Import parses the file before it touches the database. A file this app exported replaces the whole library. If the device already has a topic or a card, the user confirms first. Restoring clears review rows on the device. A file that does not parse leaves the library as it was. Export writes version 3, including the reverse switch, each card's reverse face, the tags, and each card's tag ids. Import still accepts version 1 and version 2. Version 1 comes in with the switch off and no reverse faces. A file older than version 3 comes in with no tags.

@@ -60,9 +60,15 @@ void main() {
       ),
     );
 
-    expect(json, startsWith('{\n  "version": 2'));
+    expect(json, startsWith('{\n  "version": 3'));
     final decoded = jsonDecode(json) as Map<String, Object?>;
-    expect(decoded.keys.toList(), ['version', 'topics', 'cards', 'settings']);
+    expect(decoded.keys.toList(), [
+      'version',
+      'topics',
+      'tags',
+      'cards',
+      'settings',
+    ]);
 
     final topics = (decoded['topics']! as List<Object?>)
         .cast<Map<String, Object?>>();
@@ -87,7 +93,9 @@ void main() {
       'difficulty',
       'created_at',
       'reverse',
+      'tag_ids',
     ]);
+    expect(cards[0]['tag_ids'], isEmpty);
     expect(cards[0]['front'], 'hola');
     expect(cards[0]['back'], 'hello');
     expect(cards[0]['topic_id'], 'child');
@@ -407,6 +415,54 @@ void main() {
     expect(restored.difficulty, 2);
   });
 
+  test('a version 3 backup keeps tags and a version 2 file has none', () {
+    final parsed = parseLibraryBackup(
+      libraryBackupJson(
+        topics: [
+          BackupTopic(
+            id: 'a',
+            name: 'A',
+            parentId: null,
+            position: 0,
+            createdAt: DateTime.utc(2026, 1, 1),
+          ),
+        ],
+        tags: const [
+          BackupTag(id: 'verb', name: 'Verb', position: 0),
+          BackupTag(id: 'noun', name: 'Noun', position: 1),
+        ],
+        cards: [
+          FlashCard.fresh(
+            id: 'hola',
+            topicId: 'a',
+            front: 'hola',
+            back: 'hello',
+            createdAt: DateTime.utc(2026, 1, 2),
+          ),
+        ],
+        cardTagIds: const {
+          'hola': ['noun', 'verb'],
+        },
+        settings: SchedulerParameters.defaults(),
+      ),
+    );
+    expect(parsed.tags.map((tag) => tag.name), ['Verb', 'Noun']);
+    expect(parsed.cardTagIds['hola'], ['noun', 'verb']);
+
+    final older = parseLibraryBackup(
+      '{"version":2,"topics":[{"id":"a","name":"A","parent_id":null,'
+      '"position":0,"created_at":"2026-01-01T00:00:00.000Z","reverse_drill":false}],'
+      '"cards":[{"id":"hola","topic_id":"a","front":"hola","back":"hello",'
+      '"learning":false,"last_review":null,"interval":600,"difficulty":1,'
+      '"created_at":"2026-01-02T00:00:00.000Z","reverse":null}],'
+      '"settings":{"correct_factor":1.5,"wrong_factor":0.5,'
+      '"difficulty_factor":0.01,"learning_window_size":10,'
+      '"learned_threshold":3600}}',
+    );
+    expect(older.tags, isEmpty);
+    expect(older.cardTagIds, isEmpty);
+  });
+
   test('a backup that cannot be restored is rejected', () {
     final json = libraryBackupJson(
       topics: sampleBackup().topics,
@@ -417,7 +473,7 @@ void main() {
     expect(() => parseLibraryBackup('not json'), throwsFormatException);
     expect(
       () => parseLibraryBackup(
-        '{"version":3,"topics":[],"cards":[],"settings":{}}',
+        '{"version":4,"topics":[],"cards":[],"settings":{}}',
       ),
       throwsBackupMessage('Backup version is not supported.'),
     );
