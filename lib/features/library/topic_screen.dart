@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../domain/scheduler.dart';
+import '../../domain/tag.dart';
 import '../study/study_session_screen.dart';
 import 'card_editor_screen.dart';
 import 'card_progress.dart';
@@ -22,6 +23,10 @@ class TopicScreen extends StatefulWidget {
 class _TopicScreenState extends State<TopicScreen> {
   List<Topic> _topics = [];
   List<FlashCard> _cards = [];
+  List<Tag> _tags = [];
+  Map<String, Set<String>> _cardTagIds = {};
+  final Set<String> _filterTagIds = {};
+  var _filterUntagged = false;
   SchedulerParameters _parameters = SchedulerParameters.defaults();
   var _loaded = false;
   var _generation = 0;
@@ -39,6 +44,8 @@ class _TopicScreenState extends State<TopicScreen> {
     final repository = LibraryScope.of(context);
     final topics = await repository.listTopics();
     var cards = await repository.listCards();
+    final tags = await repository.listTags();
+    final links = await repository.cardTagIds();
     final parameters = await repository.loadSettings();
     final topic = topics.where((item) => item.id == widget.topicId).firstOrNull;
     if (topic != null && topic.reverseDrill) {
@@ -53,6 +60,11 @@ class _TopicScreenState extends State<TopicScreen> {
     setState(() {
       _topics = topics;
       _cards = cards;
+      _tags = tags;
+      _cardTagIds = {
+        for (final entry in links.entries) entry.key: entry.value.toSet(),
+      };
+      _filterTagIds.removeWhere((id) => !tags.any((tag) => tag.id == id));
       _parameters = parameters;
       _loaded = true;
     });
@@ -66,6 +78,13 @@ class _TopicScreenState extends State<TopicScreen> {
 
   List<FlashCard> get _ownCards =>
       _cards.where((card) => card.topicId == widget.topicId).toList();
+
+  List<FlashCard> get _visibleOwnCards => cardsMatchingTags(
+    cards: _ownCards,
+    tagsByCard: _cardTagIds,
+    tagIds: _filterTagIds,
+    untagged: _filterUntagged,
+  );
 
   String _subtitle(String topicId) {
     final subtopics = _topics
@@ -190,12 +209,32 @@ class _TopicScreenState extends State<TopicScreen> {
   Future<void> _study(Topic topic) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (context) =>
-            StudySessionScreen(title: topic.name, scopeTopicId: topic.id),
+        builder: (context) => StudySessionScreen(
+          title: topic.name,
+          scopeTopicId: topic.id,
+          tagIds: _filterUntagged || _filterTagIds.isEmpty
+              ? null
+              : Set<String>.of(_filterTagIds),
+          untagged: _filterUntagged,
+        ),
       ),
     );
     if (!mounted) return;
     await _load();
+  }
+
+  void _toggleTagFilter(String id) {
+    setState(() {
+      _filterUntagged = false;
+      if (!_filterTagIds.add(id)) _filterTagIds.remove(id);
+    });
+  }
+
+  void _toggleUntagged() {
+    setState(() {
+      _filterUntagged = !_filterUntagged;
+      if (_filterUntagged) _filterTagIds.clear();
+    });
   }
 
   @override
@@ -208,7 +247,7 @@ class _TopicScreenState extends State<TopicScreen> {
       );
     }
     final children = _children;
-    final cards = _ownCards;
+    final cards = _visibleOwnCards;
     final bottom = MediaQuery.paddingOf(context).bottom;
     return Scaffold(
       appBar: AppBar(
@@ -277,13 +316,30 @@ class _TopicScreenState extends State<TopicScreen> {
             ),
           ),
           const SliverToBoxAdapter(child: _SectionHeader('Cards')),
+          if (_tags.isNotEmpty)
+            SliverToBoxAdapter(
+              child: _TagFilter(
+                tags: _tags,
+                selected: _filterTagIds,
+                untagged: _filterUntagged,
+                onTag: _toggleTagFilter,
+                onUntagged: _toggleUntagged,
+              ),
+            ),
           if (topic.reverseDrill && cards.isNotEmpty)
             const SliverToBoxAdapter(child: _FaceColumnHeader()),
-          if (cards.isEmpty)
+          if (_ownCards.isEmpty)
             const SliverToBoxAdapter(
               child: Padding(
                 padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: Text('Add a card to this topic.'),
+              ),
+            )
+          else if (cards.isEmpty)
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Text('No cards match this filter.'),
               ),
             ),
           SliverList.builder(
@@ -432,6 +488,48 @@ class _FaceColumns extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _TagFilter extends StatelessWidget {
+  const _TagFilter({
+    required this.tags,
+    required this.selected,
+    required this.untagged,
+    required this.onTag,
+    required this.onUntagged,
+  });
+
+  final List<Tag> tags;
+  final Set<String> selected;
+  final bool untagged;
+  final ValueChanged<String> onTag;
+  final VoidCallback onUntagged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (final tag in tags)
+            FilterChip(
+              key: Key('tag-filter-${tag.id}'),
+              label: Text(tag.name),
+              selected: selected.contains(tag.id),
+              onSelected: (_) => onTag(tag.id),
+            ),
+          FilterChip(
+            key: const Key('tag-filter-untagged'),
+            label: const Text('Untagged'),
+            selected: untagged,
+            onSelected: (_) => onUntagged(),
+          ),
+        ],
+      ),
     );
   }
 }

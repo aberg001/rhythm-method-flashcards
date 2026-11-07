@@ -4,6 +4,7 @@ import '../../domain/scheduler.dart';
 import 'ids.dart';
 import 'library_scope.dart';
 import 'name_dialog.dart';
+import 'tags_screen.dart';
 import 'topic_screen.dart';
 import 'topic_tile.dart';
 
@@ -89,6 +90,18 @@ class _LibraryScreenState extends State<LibraryScreen> {
       appBar: AppBar(
         title: const Text('Library'),
         actions: [
+          IconButton(
+            key: const Key('tags-button'),
+            tooltip: 'Tags',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (context) => const TagsScreen(),
+                ),
+              );
+            },
+            icon: const Icon(Icons.label_outline),
+          ),
           IconButton(
             tooltip: 'Add topic',
             onPressed: _addTopic,

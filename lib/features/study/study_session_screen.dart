@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import '../../data/library_repository.dart';
 import '../../domain/scheduler.dart';
+import '../../domain/tag.dart';
 import '../library/card_editor_screen.dart';
 import '../library/library_scope.dart';
 import 'study_status.dart';
@@ -30,6 +31,8 @@ class StudySessionScreen extends StatefulWidget {
     super.key,
     required this.title,
     this.scopeTopicId,
+    this.tagIds,
+    this.untagged = false,
     this.now,
     this.draw,
   });
@@ -38,6 +41,13 @@ class StudySessionScreen extends StatefulWidget {
 
   /// Topic plus descendants. Null studies every topic in the library.
   final String? scopeTopicId;
+
+  /// Cards that have any of these tags. Null studies every card in scope.
+  /// Ignored when [untagged] is set. Not combined with [untagged].
+  final Set<String>? tagIds;
+
+  /// Cards with no tags. Not combined with [tagIds].
+  final bool untagged;
 
   final DateTime Function()? now;
   final WeightDraw? draw;
@@ -136,7 +146,15 @@ class _StudySessionScreenState extends State<StudySessionScreen>
       await repository.ensureReverseFaces(topic.id, now: _clock());
       if (!mounted || generation != _generation) return;
     }
-    final cards = await repository.listCards();
+    final links = await repository.cardTagIds();
+    final cards = cardsMatchingTags(
+      cards: await repository.listCards(),
+      tagsByCard: {
+        for (final entry in links.entries) entry.key: entry.value.toSet(),
+      },
+      tagIds: widget.tagIds,
+      untagged: widget.untagged,
+    );
     if (!mounted || generation != _generation) return;
     setState(() {
       _topics = topics;

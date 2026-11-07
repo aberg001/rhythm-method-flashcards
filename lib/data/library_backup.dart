@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../domain/scheduler.dart';
+import '../domain/tag.dart';
 
 /// A topic row in a backup, including the creation time the scheduler uses
 /// when it picks the oldest new card.
@@ -22,33 +23,55 @@ final class BackupTopic {
   final bool reverseDrill;
 }
 
+/// A tag row in a backup. Position is the library order.
+final class BackupTag {
+  const BackupTag({
+    required this.id,
+    required this.name,
+    required this.position,
+  });
+
+  final String id;
+  final String name;
+  final int position;
+}
+
 /// One backup. Review rows are not part of the file.
 ///
-/// Version 2 is what this app writes. Version 1 is still accepted, and it
-/// imports with every reverse switch off and no reverse faces.
+/// Version 3 is what this app writes. Versions 1 and 2 are still accepted.
+/// A version 1 file has the reverse switch off and no reverse faces. A file
+/// older than version 3 has no tags.
 final class LibraryBackup {
   const LibraryBackup({
     required this.topics,
     required this.cards,
     required this.settings,
+    this.tags = const [],
+    this.cardTagIds = const {},
   });
 
   final List<BackupTopic> topics;
+  final List<BackupTag> tags;
   final List<FlashCard> cards;
+
+  /// Tag ids for each card, in backup order. Cards with no tags are absent.
+  final Map<String, List<String>> cardTagIds;
   final SchedulerParameters settings;
 }
 
-/// Version 2 backup of topics, cards, and the five settings.
+/// Version 3 backup of topics, tags, cards, and the five settings.
 ///
 /// Review rows are left out. [parseLibraryBackup] reads this file back,
-/// including a version 1 file.
+/// including a version 1 or version 2 file.
 String libraryBackupJson({
   required List<BackupTopic> topics,
   required List<FlashCard> cards,
   required SchedulerParameters settings,
+  List<BackupTag> tags = const [],
+  Map<String, List<String>> cardTagIds = const {},
 }) {
   final payload = <String, Object?>{
-    'version': 2,
+    'version': 3,
     'topics': [
       for (final topic in topics)
         <String, Object?>{
@@ -58,6 +81,14 @@ String libraryBackupJson({
           'position': topic.position,
           'created_at': _timestamp(topic.createdAt),
           'reverse_drill': topic.reverseDrill,
+        },
+    ],
+    'tags': [
+      for (final tag in tags)
+        <String, Object?>{
+          'id': tag.id,
+          'name': tag.name,
+          'position': tag.position,
         },
     ],
     'cards': [
@@ -75,6 +106,7 @@ String libraryBackupJson({
           'difficulty': card.difficulty,
           'created_at': _timestamp(card.createdAt),
           'reverse': _reverseJson(card),
+          'tag_ids': cardTagIds[card.id] ?? const <String>[],
         },
     ],
     'settings': <String, Object?>{
@@ -103,10 +135,11 @@ Map<String, Object?>? _reverseJson(FlashCard card) {
   };
 }
 
-/// Reads a version 1 or version 2 backup. Throws [FormatException] when the
+/// Reads a version 1, 2, or 3 backup. Throws [FormatException] when the
 /// file cannot be restored without changing the scheduler's meaning.
 ///
 /// A version 1 file has the reverse switch off and no reverse faces.
+/// A file older than version 3 has no tags.
 LibraryBackup parseLibraryBackup(String source) {
   final Object? decoded;
   try {
@@ -119,19 +152,66 @@ LibraryBackup parseLibraryBackup(String source) {
   }
   final json = Map<String, Object?>.from(decoded);
   final version = json['version'];
-  if (version is! num || (version != 1 && version != 2)) {
+  if (version is! num || (version != 1 && version != 2 && version != 3)) {
     throw const FormatException('Backup version is not supported.');
   }
-  final includeReverse = version == 2;
+  final includeReverse = version != 1;
+  final includeTags = version == 3;
 
   final topics = _topicsFrom(json['topics'], includeReverse: includeReverse);
   final topicIds = {for (final topic in topics) topic.id};
   _rejectTopicCycles(topics);
+  final tags = includeTags ? _tagsFrom(json['tags']) : const <BackupTag>[];
+  final parsed = _cardsFrom(
+    json['cards'],
+    topicIds,
+    includeReverse: includeReverse,
+    tagIds: {for (final tag in tags) tag.id},
+    includeTags: includeTags,
+  );
   return LibraryBackup(
     topics: topics,
-    cards: _cardsFrom(json['cards'], topicIds, includeReverse: includeReverse),
+    tags: tags,
+    cards: parsed.cards,
+    cardTagIds: parsed.tagIds,
     settings: _settingsFrom(json['settings']),
   );
+}
+
+List<BackupTag> _tagsFrom(Object? value) {
+  if (value is! List) {
+    throw const FormatException('Backup is missing tags.');
+  }
+  final tags = <BackupTag>[];
+  final seenIds = <String>{};
+  final seenNames = <String>{};
+  for (final item in value) {
+    if (item is! Map) {
+      throw const FormatException('A tag is missing an id.');
+    }
+    final json = Map<String, Object?>.from(item);
+    final id = json['id'];
+    if (id is! String || id.isEmpty) {
+      throw const FormatException('A tag is missing an id.');
+    }
+    if (!seenIds.add(id)) {
+      throw FormatException('Tag $id appears more than once.');
+    }
+    final name = json['name'];
+    if (name is! String || canonicalTagName(name).isEmpty) {
+      throw FormatException('Tag $id is missing a name.');
+    }
+    final stored = canonicalTagName(name);
+    if (!seenNames.add(stored.toLowerCase())) {
+      throw FormatException('Tag $stored appears more than once.');
+    }
+    final position = _asInt(json['position']);
+    if (position == null || position < 0) {
+      throw FormatException('Tag $id has an invalid position.');
+    }
+    tags.add(BackupTag(id: id, name: stored, position: position));
+  }
+  return tags;
 }
 
 List<BackupTopic> _topicsFrom(Object? value, {required bool includeReverse}) {
@@ -228,15 +308,18 @@ void _rejectTopicCycles(List<BackupTopic> topics) {
   }
 }
 
-List<FlashCard> _cardsFrom(
+({List<FlashCard> cards, Map<String, List<String>> tagIds}) _cardsFrom(
   Object? value,
   Set<String> topicIds, {
   required bool includeReverse,
+  required bool includeTags,
+  required Set<String> tagIds,
 }) {
   if (value is! List) {
     throw const FormatException('Backup is missing cards.');
   }
   final cards = <FlashCard>[];
+  final cardTagIds = <String, List<String>>{};
   final seen = <String>{};
   for (final item in value) {
     if (item is! Map) {
@@ -296,6 +379,10 @@ List<FlashCard> _cardsFrom(
       throw FormatException('Card $id is missing a reverse face.');
     }
     final reverse = _reverseFrom(id, json['reverse'], includeReverse);
+    if (includeTags) {
+      final ids = _cardTagIdsFrom(id, json['tag_ids'], tagIds);
+      if (ids.isNotEmpty) cardTagIds[id] = ids;
+    }
     cards.add(
       FlashCard(
         id: id,
@@ -315,7 +402,28 @@ List<FlashCard> _cardsFrom(
       ),
     );
   }
-  return cards;
+  return (cards: cards, tagIds: cardTagIds);
+}
+
+List<String> _cardTagIdsFrom(String id, Object? value, Set<String> known) {
+  if (value is! List) {
+    throw FormatException('Card $id is missing tags.');
+  }
+  final ids = <String>[];
+  final seen = <String>{};
+  for (final item in value) {
+    if (item is! String || item.isEmpty) {
+      throw FormatException('Card $id has an invalid tag.');
+    }
+    if (!seen.add(item)) {
+      throw FormatException('Card $id lists tag $item more than once.');
+    }
+    if (!known.contains(item)) {
+      throw FormatException('Card $id has a tag that is not in the backup.');
+    }
+    ids.add(item);
+  }
+  return ids;
 }
 
 final class _ReverseFields {
