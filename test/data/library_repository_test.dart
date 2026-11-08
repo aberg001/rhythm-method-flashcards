@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 // version 1 file before Drift opens it.
 // ignore: depend_on_referenced_packages
 import 'package:sqlite3/sqlite3.dart';
+import 'package:rhythm_method_flashcards/data/card_import.dart';
 import 'package:rhythm_method_flashcards/data/database.dart';
 import 'package:rhythm_method_flashcards/data/library_backup.dart';
 import 'package:rhythm_method_flashcards/data/library_repository.dart';
@@ -452,6 +453,132 @@ void main() {
       );
     },
   );
+
+  test('import adds new cards in file order and skips duplicates', () async {
+    final existingCreated = DateTime.utc(2026, 1, 1);
+    await repository.insertTopic(id: 'spanish', name: 'Spanish');
+    await repository.insertTopic(id: 'other', name: 'Other');
+    await repository.insertCard(
+      FlashCard(
+        id: 'known',
+        topicId: 'spanish',
+        front: 'hola',
+        back: 'hello',
+        learning: true,
+        lastReview: DateTime.utc(2026, 2, 1),
+        intervalSeconds: 300,
+        difficulty: 1.25,
+        createdAt: existingCreated,
+      ),
+    );
+    await repository.insertCard(
+      FlashCard.fresh(
+        id: 'elsewhere',
+        topicId: 'other',
+        front: 'adios',
+        back: 'goodbye',
+        createdAt: existingCreated,
+      ),
+    );
+    await repository.insertTag(id: 'verb', name: 'verb');
+
+    final parsed = parseCardImport(
+      'front,back,tags\n'
+      'hola,hello,verb\n'
+      'adios,goodbye,noun\n'
+      'buenas,good morning,Verb\n',
+      fileName: 'cards.csv',
+    );
+    final result = await repository.importCards(
+      topicId: 'spanish',
+      parsed: parsed,
+      now: DateTime.utc(2026, 3, 1, 12),
+    );
+    expect(result.added, 2);
+    expect(result.skipped, 1);
+
+    final known = await repository.card('known');
+    expect(known.intervalSeconds, 300);
+    expect(known.difficulty, 1.25);
+    expect(known.learning, isTrue);
+    expect(await repository.tagIdsFor('known'), isEmpty);
+
+    final cards = await repository.listCards(topicId: 'spanish');
+    expect(cards.map((card) => card.front), ['hola', 'adios', 'buenas']);
+    final adios = cards[1];
+    final buenas = cards[2];
+    expect(adios.back, 'goodbye');
+    expect(adios.learning, isFalse);
+    expect(adios.lastReview, isNull);
+    expect(adios.intervalSeconds, 600);
+    expect(adios.difficulty, 1);
+    expect(adios.hasReverse, isFalse);
+    expect(adios.createdAt.isBefore(buenas.createdAt), isTrue);
+    expect(
+      buenas.createdAt.difference(adios.createdAt),
+      const Duration(seconds: 1),
+    );
+    expect(adios.createdAt.isAfter(known.createdAt), isTrue);
+    final names = {
+      for (final tag in await repository.listTags()) tag.id: tag.name,
+    };
+    final adiosTags = [
+      for (final id in await repository.tagIdsFor(adios.id)) names[id],
+    ];
+    final buenasTags = [
+      for (final id in await repository.tagIdsFor(buenas.id)) names[id],
+    ];
+    expect(adiosTags, ['noun']);
+    expect(buenasTags, ['verb']);
+    expect((await repository.listTags()).map((tag) => tag.name), [
+      'verb',
+      'noun',
+    ]);
+    expect((await repository.card('elsewhere')).topicId, 'other');
+  });
+
+  test(
+    'import into a reverse-drill topic gives each new card a face',
+    () async {
+      await repository.insertTopic(id: 'spanish', name: 'Spanish');
+      await repository.setReverseDrill(
+        'spanish',
+        enabled: true,
+        now: DateTime.utc(2026, 3, 1),
+      );
+      final parsed = parseCardImport(
+        'front,back\nhola,hello\n',
+        fileName: 'cards.csv',
+      );
+      await repository.importCards(
+        topicId: 'spanish',
+        parsed: parsed,
+        now: DateTime.utc(2026, 3, 2),
+      );
+      final card = (await repository.listCards()).single;
+      expect(card.front, 'hola');
+      expect(card.learning, isFalse);
+      expect(card.hasReverse, isTrue);
+      expect(card.reverseLearning, isFalse);
+      expect(card.reverseLastReview, isNull);
+      expect(card.reverseIntervalSeconds, 600);
+      expect(card.reverseDifficulty, 1);
+    },
+  );
+
+  test('import into a missing topic changes nothing', () async {
+    await repository.insertTag(id: 'verb', name: 'verb');
+    final parsed = parseCardImport(
+      'front,back,tags\nhola,hello,noun\n',
+      fileName: 'cards.csv',
+    );
+    expect(
+      () => repository.importCards(topicId: 'missing', parsed: parsed),
+      throwsStateError,
+    );
+    expect(await repository.listCards(), isEmpty);
+    expect(await repository.listTags(), hasLength(1));
+  });
 
   test('tags keep their spelling, and deleting one leaves the card', () async {
     await repository.insertTopic(id: 'spanish', name: 'Spanish');

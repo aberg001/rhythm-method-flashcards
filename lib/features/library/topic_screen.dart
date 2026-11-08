@@ -1,20 +1,28 @@
 import 'package:flutter/material.dart';
 
+import '../../data/card_import.dart';
 import '../../domain/scheduler.dart';
 import '../../domain/tag.dart';
 import '../study/study_session_screen.dart';
 import 'card_editor_screen.dart';
 import 'card_progress.dart';
 import 'ids.dart';
+import 'import_preview.dart';
 import 'library_scope.dart';
 import 'name_dialog.dart';
+import 'pick_card_import.dart';
 import 'topic_tile.dart';
 
 /// One topic: its subtopics, its own cards, and a study session for this scope.
 class TopicScreen extends StatefulWidget {
-  const TopicScreen({super.key, required this.topicId});
+  const TopicScreen({super.key, required this.topicId, this.pickImport});
 
   final String topicId;
+
+  /// Reads a CSV, TSV, or Anki text file. Null opens the platform file picker.
+  ///
+  /// Returns null when the user cancels. Tests pass their own function.
+  final Future<CardImportFile?> Function()? pickImport;
 
   @override
   State<TopicScreen> createState() => _TopicScreenState();
@@ -29,6 +37,7 @@ class _TopicScreenState extends State<TopicScreen> {
   var _filterUntagged = false;
   SchedulerParameters _parameters = SchedulerParameters.defaults();
   var _loaded = false;
+  var _busy = false;
   var _generation = 0;
 
   @override
@@ -156,6 +165,63 @@ class _TopicScreenState extends State<TopicScreen> {
     await LibraryScope.of(context).reorderTopics(ids);
     if (!mounted) return;
     await _load();
+  }
+
+  Future<void> _importCards() async {
+    if (_busy) return;
+    final pick = widget.pickImport ?? pickCardImport;
+    final CardImportFile? file;
+    try {
+      file = await pick();
+    } catch (_) {
+      if (!mounted) return;
+      _showMessage('Could not read that file.');
+      return;
+    }
+    if (!mounted || file == null) return;
+
+    final ParsedCardImport parsed;
+    try {
+      parsed = parseCardImport(file.text, fileName: file.name);
+    } on FormatException catch (error) {
+      if (!mounted) return;
+      _showMessage(error.message);
+      return;
+    }
+
+    final plan = planCardImport(
+      parsed: parsed,
+      existingCards: [
+        for (final card in _ownCards) (front: card.front, back: card.back),
+      ],
+      existingTags: [for (final tag in _tags) (name: tag.name)],
+    );
+    if (!mounted) return;
+    final confirmed = await showCardImportPreview(context, plan);
+    if (!confirmed || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      final result = await LibraryScope.of(
+        context,
+      ).importCards(topicId: widget.topicId, parsed: parsed);
+      if (!mounted) return;
+      _showMessage(cardImportResultText(result));
+    } catch (_) {
+      if (!mounted) return;
+      _showMessage('Could not import these cards.');
+    } finally {
+      if (mounted) {
+        setState(() => _busy = false);
+        await _load();
+      }
+    }
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _addCard() async {
@@ -392,10 +458,20 @@ class _TopicScreenState extends State<TopicScreen> {
           SliverToBoxAdapter(
             child: Align(
               alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                onPressed: _addCard,
-                icon: const Icon(Icons.add),
-                label: const Text('Add card'),
+              child: Wrap(
+                children: [
+                  TextButton.icon(
+                    onPressed: _addCard,
+                    icon: const Icon(Icons.add),
+                    label: const Text('Add card'),
+                  ),
+                  TextButton.icon(
+                    key: const Key('import-cards-button'),
+                    onPressed: _busy ? null : _importCards,
+                    icon: const Icon(Icons.file_upload_outlined),
+                    label: const Text('Import cards'),
+                  ),
+                ],
               ),
             ),
           ),

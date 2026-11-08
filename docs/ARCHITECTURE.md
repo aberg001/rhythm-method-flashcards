@@ -62,7 +62,7 @@ lib/
   main.dart                 opens the database and starts the app
   app.dart                  Material app and the three tabs
   domain/scheduler.dart     grade, select, and undo snapshots
-  data/                     Drift database, repository, backup JSON
+  data/                     Drift database, repository, backup JSON, card import
   features/
     library/                topics, cards, and the editor
     study/                  session and the status line
@@ -91,3 +91,7 @@ Generated database code is `lib/data/database.g.dart`. Drift stays on 2.31.0 so 
 Export writes topics, cards, and settings to `rhythm-method-backup.json` and hands it to the system share sheet. Review history is not in the file. Timestamps are UTC.
 
 Import parses the file before it touches the database. A file this app exported replaces the whole library. If the device already has a topic or a card, the user confirms first. Restoring clears review rows on the device. A file that does not parse leaves the library as it was. Export writes version 3, including the reverse switch, each card's reverse face, the tags, and each card's tag ids. Import still accepts version 1 and version 2. Version 1 comes in with the switch off and no reverse faces. A file older than version 3 comes in with no tags.
+
+## Card import
+
+Import cards, on a topic, reads a UTF-8 CSV, TSV, or Anki plain-text file and adds cards to that topic only. The parser is `lib/data/card_import.dart`. It does not replace the library and it does not use the backup buttons. A preview counts cards, skipped rows, and tag names that will be created. Confirming writes them in one transaction. A row whose trimmed front and back already exist in the topic is skipped. Each new card starts at the initial interval and difficulty. Tags in the file attach to existing library tags or create them.

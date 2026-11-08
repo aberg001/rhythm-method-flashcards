@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../domain/scheduler.dart';
 import '../domain/tag.dart';
+import 'card_import.dart';
 import 'database.dart';
 import 'library_backup.dart';
 
@@ -348,6 +349,93 @@ class LibraryRepository {
     });
   }
 
+  /// Adds [parsed] to one topic. New cards start at the initial interval and
+  /// difficulty, after every card already in the library, in file order.
+  ///
+  /// Rows that match a card already in the topic, or an earlier row, are
+  /// skipped. Tags that the library does not have yet are created. A topic
+  /// with the reverse drill on gets a dormant reverse for each new card.
+  /// The write is one transaction, so a failure leaves the library unchanged.
+  Future<CardImportResult> importCards({
+    required String topicId,
+    required ParsedCardImport parsed,
+    DateTime? now,
+  }) {
+    return _db.transaction(() async {
+      final topic = await (_db.select(
+        _db.topics,
+      )..where((row) => row.id.equals(topicId))).getSingleOrNull();
+      if (topic == null) {
+        throw StateError('Topic $topicId does not exist');
+      }
+      final existingCards = await listCards();
+      final tags = await listTags();
+      final plan = planCardImport(
+        parsed: parsed,
+        existingCards: [
+          for (final card in existingCards)
+            if (card.topicId == topicId) (front: card.front, back: card.back),
+        ],
+        existingTags: [for (final tag in tags) (name: tag.name)],
+      );
+      if (plan.cards.isEmpty) {
+        return CardImportResult(added: 0, skipped: plan.skipped);
+      }
+
+      final clock = now ?? DateTime.now().toUtc();
+      final parameters = await loadSettings();
+      final start = _importStart(existingCards, clock);
+      final known = [...tags];
+      var nextPosition = known.isEmpty
+          ? 0
+          : known.map((tag) => tag.position).reduce((a, b) => a > b ? a : b) +
+                1;
+      for (final name in plan.tagsToCreate) {
+        final id = _newCardId();
+        await _db
+            .into(_db.tags)
+            .insert(
+              TagsCompanion.insert(id: id, name: name, position: nextPosition),
+            );
+        known.add(Tag(id: id, name: name, position: nextPosition));
+        nextPosition += 1;
+      }
+
+      var library = [...existingCards];
+      for (var index = 0; index < plan.cards.length; index++) {
+        final planned = plan.cards[index];
+        var card = FlashCard.fresh(
+          id: _newCardId(),
+          topicId: topicId,
+          front: planned.front,
+          back: planned.back,
+          createdAt: start.add(Duration(seconds: index)),
+        );
+        if (topic.reverseDrill) {
+          card = _spawnMissingReverse(
+            card,
+            existing: library,
+            parameters: parameters,
+            now: clock,
+          );
+        }
+        await _db.into(_db.cards).insert(_cardCompanion(card));
+        library = [...library, card];
+        for (final name in planned.tagNames) {
+          await _db
+              .into(_db.cardTags)
+              .insert(
+                CardTagsCompanion.insert(
+                  cardId: card.id,
+                  tagId: _tagIdFor(name, known),
+                ),
+              );
+        }
+      }
+      return CardImportResult(added: plan.cards.length, skipped: plan.skipped);
+    });
+  }
+
   /// Topics, cards, tags, and settings as version 3 JSON. Review rows are omitted.
   ///
   /// Topic creation times come from the stored rows. The domain [Topic] does
@@ -681,6 +769,42 @@ FlashCard _spawnMissingReverse(
     return queueReverseBackfill([card], ceiling: ceiling).single;
   }
   return queueDormantReverses([card], behind: ceiling).single;
+}
+
+int _cardIdSerial = 0;
+
+String _newCardId() {
+  _cardIdSerial += 1;
+  final micros = DateTime.now().toUtc().microsecondsSinceEpoch;
+  return '$micros-$_cardIdSerial';
+}
+
+DateTime _importStart(List<FlashCard> cards, DateTime now) {
+  var latest = _wholeSecond(now);
+  for (final card in cards) {
+    final stamp = _wholeSecond(card.createdAt);
+    if (stamp.isAfter(latest)) latest = stamp;
+  }
+  return latest.add(const Duration(seconds: 1));
+}
+
+DateTime _wholeSecond(DateTime time) {
+  final utc = time.toUtc();
+  return DateTime.utc(
+    utc.year,
+    utc.month,
+    utc.day,
+    utc.hour,
+    utc.minute,
+    utc.second,
+  );
+}
+
+String _tagIdFor(String name, List<Tag> tags) {
+  for (final tag in tags) {
+    if (tagNamesMatch(tag.name, name)) return tag.id;
+  }
+  throw StateError('Tag $name does not exist');
 }
 
 String _checkedTagName(String name, List<Tag> existing, {String? exceptId}) {
